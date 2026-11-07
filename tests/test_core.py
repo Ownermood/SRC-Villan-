@@ -97,6 +97,9 @@ def test_send_paths():
     c = Client()
     run(send(c, 7, [CloneMessage(Msg(1, "a", media="M", kind="photo"))], Config(), same_client=False))
     assert isinstance(c.calls[0][2], str)
+    from tgclone import message as message_mod
+    assert -1 in message_mod.PROTECTED_CHATS, "a protected chat is remembered: no more doomed tries"
+    message_mod.PROTECTED_CHATS.clear()
     c = Client()
     run(send(c, 7, [CloneMessage(Msg(1, "a"))], Config(forward_mode=True)))
     assert c.calls[0][0] == "fwd"

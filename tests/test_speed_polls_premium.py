@@ -619,3 +619,155 @@ def test_destinations_are_sent_at_the_same_time():
     n = run(a.deliver(-1, [CloneMessage(m)], [7, 8, 9]))
     assert n == 3 and peak[0] == 3, "3 destinations in parallel"
     assert len(downloads) == 1, "the file is downloaded once for all destinations"
+
+
+def _wire_plain(a, msgs, protected=False):
+    c = a.reader
+
+    async def it(src, reverse, min_id, max_id):
+        for m in msgs:
+            if m.id > min_id:
+                yield m
+
+    async def gm(chat, ids=None, limit=None):
+        return [msgs[-1]]
+
+    async def ent(cid):
+        return _t.SimpleNamespace(title="Src", noforwards=protected)
+
+    async def resolve(ref):
+        return int(ref)
+    c.iter_messages, c.get_messages, c.get_entity, a.resolve = it, gm, ent, resolve
+
+
+def test_protected_chat_detected_once_and_prefetched():
+    """Real log: posts without the noforwards flag in a protected group -> a doomed try per post."""
+    from fakes import Client as C
+    from tgclone import app as appmod
+    tries, order = [], []
+
+    class Restricted(C):
+        async def send_message(self, dest, text, file=None, **kw):
+            from telethon.errors import ChatForwardsRestrictedError
+            if file is not None:
+                tries.append(1)
+                raise ChatForwardsRestrictedError(None)
+            return await super().send_message(dest, text, file=file, **kw)
+
+        async def send_file(self, dest, f, caption=None, **kw):
+            order.append(("up", caption))
+            return await super().send_file(dest, f, caption=caption, **kw)
+
+    class M(Msg):
+        async def download_media(self, file, thumb=None, progress_callback=None):
+            if thumb is None:
+                order.append(("down", self.id))
+            await asyncio.sleep(0.01)
+            return await super().download_media(file, thumb, progress_callback)
+    a = make_app(Restricted())
+    msgs = [M(i, f"v{i}", media="M", kind="video", chat_id=-1) for i in range(1, 6)]
+    _wire_plain(a, msgs, protected=True)
+    run(appmod.run_forward(a, Forward(source=-1, dest=[7])))
+    assert not tries, "protected source detected up front: no doomed reference tries"
+    first_up = order.index(("up", "v1"))
+    assert sum(1 for x in order[:first_up] if x[0] == "down") >= 3, "prefetch works for chat-level protection"
+
+
+def test_long_caption_goes_under_the_media():
+    from fakes import Client as C
+    from telethon.errors import MediaCaptionTooLongError
+    long_text = "x" * 2000
+
+    class Normal(C):
+        async def get_me(self):
+            return _t.SimpleNamespace(premium=False, bot=False)
+
+        async def send_file(self, dest, f, caption=None, **kw):
+            if caption and len(caption) > 1024:
+                raise MediaCaptionTooLongError(None)
+            return await super().send_file(dest, f, caption=caption, **kw)
+
+        async def send_message(self, dest, text="", file=None, **kw):
+            if file is not None and len(text) > 1024:
+                raise MediaCaptionTooLongError(None)
+            return await super().send_message(dest, text, file=file, **kw)
+    c = Normal()
+    out = run(send(c, 7, [CloneMessage(Msg(1, long_text, media="M", kind="video", noforwards=True))], Config()))
+    media_call, caption_call = c.calls[0], c.calls[1]
+    assert media_call[0] == "file" and not media_call[3], "media without caption"
+    assert caption_call[0] == "msg" and caption_call[2] == long_text and caption_call[4] == out[0].id
+    c2 = Normal()
+    run(send(c2, 7, [CloneMessage(Msg(2, long_text, media="M", kind="photo"))], Config()))
+    assert c2.calls[0][3] == "M" and c2.calls[1][2] == long_text, "reference copy too"
+
+
+def test_telegram_timeouts_are_retried_not_dropped(monkeypatch):
+    from fakes import Client as C
+    from tgclone import app as appmod
+    from tgclone.jobs import Job, current_job
+    real_sleep = asyncio.sleep
+    waits = []
+
+    async def no_wait(sec):
+        waits.append(sec)
+        await real_sleep(0)
+    monkeypatch.setattr(appmod.asyncio, "sleep", no_wait)
+    fails = {"n": 2}
+
+    class Flaky(C):
+        async def send_message(self, dest, text, file=None, **kw):
+            if fails["n"]:
+                fails["n"] -= 1
+                raise ValueError("Request was unsuccessful 6 time(s)")
+            return await super().send_message(dest, text, file=file, **kw)
+    a = make_app(Flaky())
+    assert run(a.deliver(-1, [CloneMessage(Msg(1, "hi", chat_id=-1))], [7])) == 1
+    assert waits[:2] == [10, 30], "waits 10 s, then 30 s, then succeeds"
+
+    class Broken(C):
+        async def send_message(self, dest, text, file=None, **kw):
+            raise ValueError("MESSAGE_EMPTY")
+    b = make_app(Broken())
+    job = Job("clone", "t", "k")
+
+    async def go():
+        current_job.set(job)
+        return await b.deliver(-1, [CloneMessage(Msg(9, "x", chat_id=-1))], [7])
+    assert run(go()) == 0 and job.failed_ids == [9] and "Post 9 not sent" in job.note
+    job.state = "done"
+    assert "Not sent: 9" in job.render()
+
+
+def test_bot_not_in_destination_is_tried_once():
+    from fakes import Client as C
+
+    class Acc(C):
+        async def get_me(self):
+            return _t.SimpleNamespace(premium=False, bot=False)
+
+    class Bot(C):
+        looked = 0
+
+        async def get_input_entity(self, ref):
+            Bot.looked += 1
+            raise ValueError("Could not find the input entity")
+    a = make_app(Acc())
+    a.bot = Bot()
+    for i in (1, 2):
+        m = Msg(i, "hi 😀", chat_id=-1)
+        m.entities = [types.MessageEntityCustomEmoji(3, 2, document_id=5)]
+        run(a.deliver(-1, [CloneMessage(m)], [7]))
+    assert Bot.looked == 1 and len(a.reader.calls) == 2 and not a.bot.calls
+
+
+def test_job_card_shows_what_is_happening():
+    from tgclone import jobs
+    j = jobs.Job("clone", "t", "k")
+    token = jobs.current_job.set(j)
+    jobs.stage("⬇️ Downloading post 2477")
+    jobs.note("Caption too long for this account — posted as a reply under the media")
+    jobs.current_job.reset(token)
+    text = j.render()
+    assert "Downloading post 2477" in text and "Caption too long" in text
+    jobs.stage("outside a job does nothing")
+    assert "outside" not in j.render()

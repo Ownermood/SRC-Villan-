@@ -45,3 +45,11 @@ def hubenv(tmp_path, monkeypatch):
     return _t.SimpleNamespace(new_hub=new_hub, made=made, factory=factory, tmp=tmp_path)
 
 
+
+
+@pytest.fixture(autouse=True)
+def _fresh_protected_chats():
+    from tgclone import message
+    message.PROTECTED_CHATS.clear()
+    yield
+    message.PROTECTED_CHATS.clear()

@@ -180,9 +180,19 @@ class Panel:
                     pass
                 if not self.is_bot:
                     return
-                try:  # small ping so the admin notices completion
-                    await self.c.send_message(card.chat_id, f"{'✅' if j.state == 'done' else 'ℹ️'} "
-                                              f"Job #{j.id} {j.state}", reply_to=card.id)
+                try:  # summary in the user's DM so they see the result at a glance
+                    from tgclone.jobs import human_time
+                    head = {"done": "✅ Finished", "stopped": "⏹ Stopped", "failed": "❌ Failed"}.get(
+                        j.state, j.state)
+                    lines = [f"{head} · <b>#{j.id} {j.kind}</b>",
+                             f"📨 {j.done:,} done · ⚠️ {j.failed + len(j.failed_ids):,} not sent · "
+                             f"⏱ {human_time(j.elapsed)}"]
+                    if j.failed_ids:
+                        lines.append("Not sent: " + ", ".join(map(str, j.failed_ids[:20])))
+                    if j.state == "stopped":
+                        lines.append("It continues from here when you start it again.")
+                    await self.c.send_message(card.chat_id, "\n".join(lines), reply_to=card.id,
+                                              parse_mode="html")
                 except Exception:
                     pass
 

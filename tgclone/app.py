@@ -12,6 +12,7 @@ from telethon.tl.custom.message import Message
 
 from tgclone.config import (CONFIG_FILE, DATA_DIR, Config, Forward, Secrets, load_config, norm_ref,
                             save_config)
+from tgclone import jobs as jobs_mod
 from tgclone.jobs import Job, JobManager
 from tgclone.message import CloneMessage, _is_premium, has_custom_emoji, media_key, send
 from tgclone.plugins import apply_plugins, load_plugins
@@ -229,7 +230,13 @@ class App:
         bot = self.bot
         if (not self.cfg.premium_emoji_via_bot or bot is None or self.sender is bot
                 or getattr(bot, "_tgc_no_emoji", False) or not has_custom_emoji(tms)
-                or await _is_premium(self.sender)):
+                or dest in getattr(bot, "_tgc_bad_dests", ()) or await _is_premium(self.sender)):
+            return None
+        try:
+            await bot.get_input_entity(dest)  # bot not in that chat: find out before any download
+        except Exception:
+            bot._tgc_bad_dests = getattr(bot, "_tgc_bad_dests", set()) | {dest}
+            log.info("Bot is not in %s - premium-emoji posts there go from the account", dest)
             return None
         try:
             sent = await send(bot, dest, tms, self.cfg, reply_to, same_client=False,
@@ -241,6 +248,7 @@ class App:
                 bot._tgc_no_emoji = True  # Telegram doesn't let this bot use them: stop trying
                 log.info("Bot can't send premium emoji (Telegram rule) - using plain emoji")
             else:
+                bot._tgc_bad_dests = getattr(bot, "_tgc_bad_dests", set()) | {dest}
                 log.info("Bot couldn't post in %s (%s) - sending from the account", dest, e)
             return None
 
@@ -272,15 +280,28 @@ class App:
                 except Exception as e:
                     log.warning("Topic for %s:%s -> %s failed: %s", src, src_topic, d, e)
             reply_to = self.store.get_one(src, replied, d) if replied else None
-            try:
-                sent = await self._send_premium_via_bot(d, tms, reply_to or topic, progress, topic)
-                if sent is None:
-                    sent = await send(self.sender, d, tms, self.cfg, reply_to or topic,
-                                      same_client=self.sender is self.reader,
-                                      progress=progress, topic=topic)
-            except Exception as e:
-                log.error("Send %s:%s -> %s failed: %s", src, first.id, d, e)
-                return 0
+            sent = None
+            for attempt in range(4):  # Telegram timeouts / server hiccups: wait and try again
+                try:
+                    sent = await self._send_premium_via_bot(d, tms, reply_to or topic, progress, topic)
+                    if sent is None:
+                        sent = await send(self.sender, d, tms, self.cfg, reply_to or topic,
+                                          same_client=self.sender is self.reader,
+                                          progress=progress, topic=topic)
+                    break
+                except Exception as e:
+                    if attempt < 3 and _transient(e):
+                        wait = (10, 30, 60)[attempt]
+                        log.warning("Post %s -> %s: %s - retrying in %ss", first.id, d, e, wait)
+                        jobs_mod.stage(f"🔁 Telegram timeout on post {first.id} — retrying in {wait}s")
+                        await asyncio.sleep(wait)
+                        continue
+                    log.error("Send %s:%s -> %s failed: %s", src, first.id, d, e)
+                    job = jobs_mod.current_job.get()
+                    if job is not None and first.id not in job.failed_ids:
+                        job.failed_ids.append(first.id)
+                        job.note = f"Post {first.id} not sent: {str(e)[:90]}"
+                    return 0
             for tm, s in zip(tms, sent):
                 self.store.add(src, tm.message.id, d, s.id, media_key(tm.message))
             return 1
@@ -293,12 +314,24 @@ class App:
         return done
 
 
+def _transient(e: Exception) -> bool:
+    """Errors worth another try later (Telegram side), not mistakes in the post."""
+    from telethon.errors import RpcCallFailError, ServerError, TimedOutError
+    if isinstance(e, (ServerError, TimedOutError, RpcCallFailError, ConnectionError,
+                      asyncio.TimeoutError, TimeoutError)):
+        return True
+    s = str(e)
+    return "Request was unsuccessful" in s or "Timeout" in s or "internal issues" in s
+
+
 def _turbo_ok(app: App, msgs: List[Message]) -> bool:
     """Can these posts be copied server-side in one batch (no download, no re-send)?"""
     from tgclone import thumbs
-    from tgclone.message import file_type
+    from tgclone.message import PROTECTED_CHATS, file_type
     cfg = app.cfg
     if not cfg.past.turbo or app.sender is not app.reader or app.plugins:
+        return False
+    if msgs and getattr(msgs[0], "chat_id", None) in PROTECTED_CHATS:
         return False
     for m in msgs:
         if m.noforwards or reply_target(m) or thumbs.needs_reupload(cfg, file_type(m)):
@@ -361,12 +394,22 @@ async def run_forward(app: App, fwd: Forward, fresh: bool = False,
     start = max(fwd.offset, app.store.get_progress(key))
     p, cfg = app.cfg.past, app.cfg
     log.info("Cloning %s -> %s from id > %s", src, dests, start)
+    from tgclone.message import PROTECTED_CHATS
+    try:  # protected source: download right away and prefetch from the first post
+        ent = await app.reader.get_entity(src)
+        if getattr(ent, "noforwards", False):
+            PROTECTED_CHATS.add(src)
+            log.info("Source %s is protected: download + upload with prefetch", src)
+    except Exception:
+        pass
+    jobs_mod.stage("📁 Preparing topics…")
     try:  # forum group: create all topics first, in the source's order
         made = await app.topics.prepare(src, dests)
         if made:
             log.info("Topics ready: %s", made)
     except Exception as e:
         log.warning("Preparing topics failed (messages still go out): %s", e)
+    jobs_mod.stage("🔍 Reading posts…")
 
     count = 0
     progress = job.file_progress if job else None
@@ -392,7 +435,7 @@ async def run_forward(app: App, fwd: Forward, fresh: bool = False,
 
     async def prepare(msgs):
         tms = await app.process(msgs)
-        if tms and any(m.noforwards for m in msgs) and cfg.protected_fallback:
+        if tms and (src in PROTECTED_CHATS or any(m.noforwards for m in msgs)) and cfg.protected_fallback:
             for tm in tms:  # download now, upload later (overlaps with the previous upload)
                 if tm.file_type in FILE_TYPES:
                     try:

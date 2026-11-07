@@ -5,7 +5,8 @@ import html
 import itertools
 import logging
 import time
-from typing import Awaitable, Callable, Dict, Optional
+from contextvars import ContextVar
+from typing import Awaitable, Callable, Dict, List, Optional
 
 log = logging.getLogger("tgclone")
 
@@ -33,6 +34,22 @@ def human_time(sec: float) -> str:
     return f"{sec // 3600}h {sec % 3600 // 60:02d}m"
 
 
+current_job: ContextVar[Optional["Job"]] = ContextVar("current_job", default=None)
+
+
+def stage(text: str) -> None:
+    """Show what is happening right now on the running job's card (no-op outside a job)."""
+    job = current_job.get()
+    if job is not None:
+        job.stage = text
+
+
+def note(text: str) -> None:
+    job = current_job.get()
+    if job is not None:
+        job.note = text
+
+
 class Job:
     _ids = itertools.count(1)
 
@@ -51,6 +68,9 @@ class Job:
         self.state = "running"  # running | done | failed | stopped
         self.error = ""
         self.file = ""  # current file transfer line
+        self.stage = ""  # what the bot is doing right now (shown on the card)
+        self.note = ""  # last noteworthy event (retry, caption split, wait...)
+        self.failed_ids: List[int] = []  # source posts that could not be sent
         self.task: Optional[asyncio.Task] = None
         self._finished = False
         self._file_t = 0.0
@@ -95,8 +115,16 @@ class Job:
         lines.append(f"📨 {self.done} done · ⚠️ {self.failed} failed")
         extra = f" · {rate:.1f}/s" if self.state == "running" and rate else ""
         lines.append(f"⏱ {human_time(self.elapsed)}{extra}")
-        if self.file and self.state == "running":
-            lines.append(self.file)
+        if self.state == "running":
+            if self.stage:
+                lines.append(f"🔎 {html.escape(self.stage)}")
+            if self.file:
+                lines.append(self.file)
+        if self.note:
+            lines.append(f"ℹ️ {html.escape(self.note[:150])}")
+        if self.failed_ids and self.state != "running":
+            ids = ", ".join(map(str, self.failed_ids[:15])) + (" …" if len(self.failed_ids) > 15 else "")
+            lines.append(f"⚠️ Not sent: {ids}")
         if self.error:
             lines.append(f"❗ {html.escape(self.error[:200])}")
         return "\n".join(lines)
@@ -121,6 +149,7 @@ class JobManager:
         self.check(job)
 
         async def runner():
+            current_job.set(job)  # stage()/note() anywhere in this job update its card
             try:
                 await fn(job)
                 job.state = "stopped" if job.cancelled else "done"

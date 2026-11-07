@@ -11,7 +11,7 @@ from typing import List, Optional
 
 from telethon import TelegramClient
 from telethon.errors import (ChatForwardsRestrictedError, DocumentInvalidError, FloodWaitError,
-                             ServerError)
+                             MediaCaptionTooLongError, ServerError)
 from telethon.tl import functions
 from telethon.extensions import html as tl_html
 
@@ -19,7 +19,7 @@ from tgclone import richtext
 from telethon.tl import types
 from telethon.tl.custom.message import Message
 
-from tgclone import fast, thumbs
+from tgclone import fast, jobs, thumbs
 from tgclone.config import DOWNLOAD_DIR, Config
 
 log = logging.getLogger("tgclone")
@@ -170,11 +170,13 @@ async def retry(fn, *args, tries: int = 4, **kwargs):
             return await fn(*args, **kwargs)
         except FloodWaitError as e:
             log.warning("FloodWait %ss (attempt %s)", e.seconds, attempt)
+            jobs.stage(f"⏳ Telegram asked to wait {e.seconds}s — continuing after that")
             await asyncio.sleep(e.seconds + 1)
         except (ServerError, ConnectionError, asyncio.TimeoutError) as e:
             if attempt == tries:
                 raise
             log.warning("Transient error %r, retrying", e)
+            jobs.note(f"Telegram hiccup ({type(e).__name__}) — retried")
             await asyncio.sleep(5 * attempt)
     raise RuntimeError("retries exhausted")
 
@@ -274,10 +276,25 @@ async def _send_poll(client, dest: int, msg: Message, text: str, ents, reply_to)
         return await _send_media_raw(client, dest, media, text, ents, reply_to)
 
 
+PROTECTED_CHATS: set = set()  # chats found to block forwarding: always download + upload
+
+
+async def _caption_after(client, dest, sent: list, text: str, ents, reply_to=None) -> list:
+    """Caption longer than the account may attach: post it as a reply right under the media."""
+    if text and sent:
+        await retry(client.send_message, dest, text, formatting_entities=ents,
+                    parse_mode="html", reply_to=sent[0].id, link_preview=False)
+        jobs.note("Caption too long for this account — posted as a reply under the media")
+    return sent
+
+
 async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
                 reply_to: Optional[int], download: bool, cfg: Config, progress=None,
-                plain_emoji: bool = False) -> list:
+                plain_emoji: bool = False, split_caption: bool = False) -> list:
     up = (lambda c, t: progress("up", c, t)) if progress else None
+    pid = tms[0].message.id
+    if download and any(tm.file_type in FILE_TYPES for tm in tms):
+        jobs.stage(f"⬇️ Downloading post {pid}")
     if len(tms) > 1:  # album
         files = []
         for tm in tms:
@@ -290,6 +307,11 @@ async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
             else:
                 files.append(path)
         captions = [_MD_EMOJI.sub(r"\1", tm.text) if plain_emoji else tm.text for tm in tms]
+        jobs.stage(f"⬆️ Uploading album at post {pid}" if download else f"📤 Sending album at post {pid}")
+        if split_caption:
+            sent = _as_list(await retry(client.send_file, dest, files, reply_to=reply_to,
+                                        progress_callback=up if download else None))
+            return await _caption_after(client, dest, sent, "\n\n".join(c for c in captions if c), None)
         return _as_list(await retry(client.send_file, dest, files,
                                     caption=captions, reply_to=reply_to, parse_mode="html",
                                     progress_callback=up if download else None))
@@ -315,19 +337,27 @@ async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
             thumb = str(thumbs.custom_path(cfg))
         if thumb:
             kw["thumb"] = thumb
+        jobs.stage(f"⬆️ Uploading post {pid}")
+        cap, cap_ents = (("", None) if split_caption else (text, ents))
         if msg.document is not None and os.path.getsize(path) > 10 * 1024 * 1024:
             # big document: fast parallel upload, original attributes kept
             media = await _uploaded_doc(client, tm, path, thumb, up)
-            return _as_list(await retry(client.send_file, dest, media, caption=text,
-                                        formatting_entities=ents, reply_to=reply_to,
+            sent = _as_list(await retry(client.send_file, dest, media, caption=cap,
+                                        formatting_entities=cap_ents, reply_to=reply_to,
                                         parse_mode="html"))
-        return _as_list(await retry(client.send_file, dest, path, caption=text,
-                                    formatting_entities=ents, reply_to=reply_to,
-                                    progress_callback=up, parse_mode="html", **kw))
+        else:
+            sent = _as_list(await retry(client.send_file, dest, path, caption=cap,
+                                        formatting_entities=cap_ents, reply_to=reply_to,
+                                        progress_callback=up, parse_mode="html", **kw))
+        return await _caption_after(client, dest, sent, text, ents) if split_caption else sent
 
     media = None if tm.file_type == "text" else msg.media
     if media is None and not text:
         return []
+    jobs.stage(f"📤 Sending post {pid}")
+    if split_caption and media is not None:
+        sent = _as_list(await retry(client.send_message, dest, "", file=media, reply_to=reply_to))
+        return await _caption_after(client, dest, sent, text, ents)
     if tm.file_type == "poll":
         if ents is None and text:
             text, ents = tl_html.parse(text)
@@ -368,7 +398,8 @@ async def send(client: TelegramClient, dest: int, tms: List[CloneMessage], cfg: 
 
     progress(direction, current, total) is called during download ("down") / upload ("up").
     """
-    protected = any(tm.message.noforwards for tm in tms)
+    chat = getattr(tms[0].message, "chat_id", None)
+    protected = any(tm.message.noforwards for tm in tms) or chat in PROTECTED_CHATS
     rethumb = any(thumbs.needs_reupload(cfg, tm.file_type) for tm in tms)
     if cfg.forward_mode and same_client and not protected and not rethumb:
         try:
@@ -385,18 +416,27 @@ async def send(client: TelegramClient, dest: int, tms: List[CloneMessage], cfg: 
     if must_download and not cfg.protected_fallback and protected:
         raise ChatForwardsRestrictedError(None)
     plain = not await _is_premium(client)
+
+    async def attempt(download: bool, plain_emoji: bool):
+        try:
+            return await _copy(client, dest, tms, reply_to, download, cfg, progress, plain_emoji)
+        except MediaCaptionTooLongError:
+            return await _copy(client, dest, tms, reply_to, download, cfg, progress, plain_emoji,
+                               split_caption=True)
     try:
         try:
-            return await _copy(client, dest, tms, reply_to, must_download, cfg, progress, plain)
+            return await attempt(must_download, plain)
         except DocumentInvalidError:
             if (plain and must_download) or not allow_plain:
                 raise
             # premium emoji / a document the sender can't reuse: plain emoji + fresh upload
             log.info("Retrying %s with plain emoji / re-upload", tms[0].message.id)
             client._tgc_premium = False
-            return await _copy(client, dest, tms, reply_to, True, cfg, progress, True)
+            return await attempt(True, True)
     except ChatForwardsRestrictedError:
         if must_download or not cfg.protected_fallback:
             raise
-        log.info("Chat is protected, falling back to download + upload")
-        return await _copy(client, dest, tms, reply_to, True, cfg, progress, plain)
+        if chat is not None and chat not in PROTECTED_CHATS:
+            PROTECTED_CHATS.add(chat)  # from now on: download right away, prefetch ahead
+            log.info("Chat %s is protected: download + upload from now on", chat)
+        return await attempt(True, plain)
