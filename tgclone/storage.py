@@ -16,6 +16,9 @@ class Store:
                 src_chat INTEGER, src_id INTEGER, dest_chat INTEGER, dest_id INTEGER,
                 PRIMARY KEY (src_chat, src_id, dest_chat));
             CREATE TABLE IF NOT EXISTS progress(key TEXT PRIMARY KEY, last_id INTEGER);
+            CREATE TABLE IF NOT EXISTS topic_map(
+                src_chat INTEGER, src_topic INTEGER, dest_chat INTEGER, dest_topic INTEGER,
+                PRIMARY KEY (src_chat, src_topic, dest_chat));
             """
         )
         cols = [r[1] for r in self.db.execute("PRAGMA table_info(msg_map)")]
@@ -70,6 +73,23 @@ class Store:
                 self.db.execute(
                     "DELETE FROM msg_map WHERE src_chat=? AND dest_chat=?", (src_chat, d)
                 )
+
+    def get_topic(self, src_chat: int, src_topic: int, dest_chat: int) -> Optional[int]:
+        row = self.db.execute(
+            "SELECT dest_topic FROM topic_map WHERE src_chat=? AND src_topic=? AND dest_chat=?",
+            (src_chat, src_topic, dest_chat)).fetchone()
+        return row[0] if row else None
+
+    def set_topic(self, src_chat: int, src_topic: int, dest_chat: int, dest_topic: int) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO topic_map VALUES (?,?,?,?)",
+                            (src_chat, src_topic, dest_chat, dest_topic))
+
+    def topics_of(self, src_chat: int, src_topic: int) -> Dict[int, int]:
+        rows = self.db.execute(
+            "SELECT dest_chat, dest_topic FROM topic_map WHERE src_chat=? AND src_topic=?",
+            (src_chat, src_topic))
+        return dict(rows.fetchall())
 
     def count(self) -> int:
         return self.db.execute("SELECT COUNT(*) FROM msg_map").fetchone()[0]

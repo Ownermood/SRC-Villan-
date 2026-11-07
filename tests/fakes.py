@@ -11,11 +11,19 @@ KINDS = ("poll", "sticker", "voice", "video_note", "gif", "audio", "video", "pho
 
 class Msg:
     def __init__(self, id, text="", media=None, kind=None, grouped_id=None, noforwards=False,
-                 reply=None, sender=5, size=10, doc_id=None, edit_date=None, fwd_from=None):
+                 reply=None, sender=5, size=10, doc_id=None, edit_date=None, fwd_from=None,
+                 topic=None, chat_id=-1):
         self.id, self.text, self.raw_text, self.message = id, text, text, text
         self.entities = None
         self.media, self.grouped_id, self.noforwards = media, grouped_id, noforwards
-        self.reply_to_msg_id, self.sender_id, self.action = reply, sender, None
+        self.reply_to_msg_id, self.sender_id, self.action = reply or topic, sender, None
+        self.chat_id = chat_id
+        from telethon.tl.types import MessageReplyHeader
+        if topic:  # forum: a post in a topic "replies" to the topic root; real replies set top_id
+            self.reply_to = MessageReplyHeader(forum_topic=True, reply_to_msg_id=reply or topic,
+                                               reply_to_top_id=topic if reply else None)
+        else:
+            self.reply_to = MessageReplyHeader(reply_to_msg_id=reply) if reply else None
         self.web_preview, self.edit_date, self.fwd_from = None, edit_date, fwd_from
         for a in KINDS:
             setattr(self, a, None)
@@ -179,6 +187,8 @@ def make_app(client=None):
     a.store = Store(Path(DATA_DIR) / f"t{next(_ids)}.db")
     a.plugins, a.admins, a.from_to, a.titles = [], {1}, {}, {}
     a.caps, a.hub, a.uid, a.home = None, None, 1, Path(DATA_DIR)
+    from tgclone.topics import Topics
+    a.topics = Topics(a)
     c = client or Client()
     a.reader = a.sender = a.user = a.control = a.bot = c
     a.jobs = JobManager(3)

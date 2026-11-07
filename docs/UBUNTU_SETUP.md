@@ -70,6 +70,10 @@ Apne bot ko `/start` bhejo → 🔐 **Login with Telegram**. Owner hone ki wajah
 4. 2-step password ho to bhejo — bot use turant delete kar deta hai
 5. ✅ Logged in → **➕ New forward** → source channel ka koi message forward karo → destination ka message forward karo → ✅ Done
 
+**Topics wala group clone:** source aur destination dono groups daalo. Bot destination mein saare topics
+(same naam, icon) khud banata hai aur har post apne topic mein bhejta hai. Destination mein login account
+**admin + "Manage topics"** permission ke saath hona chahiye.
+
 Aur features: 🔁 Clone history, 📥 post link bhejo to save, 🖼 thumbnail, 💧 watermark, 🧹 filters.
 **👤 Account → 🚪 Logout** se kabhi bhi logout (Telegram → Settings → Devices mein bhi dikhta hai).
 

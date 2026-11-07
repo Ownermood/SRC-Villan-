@@ -110,6 +110,12 @@ class SaveSettings(BaseModel):
     delay: float = Field(1.0, ge=0, le=60)
 
 
+class TopicSettings(BaseModel):
+    enabled: bool = True  # forum groups: create matching topics and post into them
+    auto_enable_forum: bool = True  # turn on Topics in the destination group if needed
+    sync_edits: bool = True  # live: topic renamed / closed in source -> same in destination
+
+
 class ThumbSettings(BaseModel):
     mode: str = "original"  # original | custom | none
     types: List[str] = ["video", "document", "audio", "gif"]  # where the mode applies
@@ -128,6 +134,7 @@ class Config(BaseModel):
     past: PastSettings = PastSettings()
     save: SaveSettings = SaveSettings()
     thumb: ThumbSettings = ThumbSettings()
+    topics: TopicSettings = TopicSettings()
     plugins: PluginConfig = PluginConfig()
     # folder holding this user's files (thumbnail, logo, db); not saved in the json
     _home: Path = PrivateAttr(default_factory=lambda: DATA_DIR)

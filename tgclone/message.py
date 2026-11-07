@@ -227,9 +227,23 @@ async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
                                 link_preview=bool(msg.web_preview)))
 
 
+async def _forward_to_topic(client: TelegramClient, dest: int, msgs: List[Message],
+                           topic: int) -> list:
+    """forward_messages can't target a topic; use the raw request with top_msg_id."""
+    from telethon.tl.functions.messages import ForwardMessagesRequest
+    import random
+    res = await retry(client, ForwardMessagesRequest(
+        from_peer=await client.get_input_entity(msgs[0].chat_id), id=[m.id for m in msgs],
+        to_peer=await client.get_input_entity(dest), top_msg_id=topic,
+        random_id=[random.randrange(-2 ** 63, 2 ** 63) for _ in msgs]))
+    sent = [u.message for u in getattr(res, "updates", [])
+            if isinstance(getattr(u, "message", None), types.Message)]
+    return sorted(sent, key=lambda m: m.id)
+
+
 async def send(client: TelegramClient, dest: int, tms: List[CloneMessage], cfg: Config,
                reply_to: Optional[int] = None, same_client: bool = True,
-               progress=None) -> list:
+               progress=None, topic: Optional[int] = None) -> list:
     """Send one message or one album to dest. Returns sent messages (same order).
 
     progress(direction, current, total) is called during download ("down") / upload ("up").
@@ -238,6 +252,8 @@ async def send(client: TelegramClient, dest: int, tms: List[CloneMessage], cfg: 
     rethumb = any(thumbs.needs_reupload(cfg, tm.file_type) for tm in tms)
     if cfg.forward_mode and same_client and not protected and not rethumb:
         try:
+            if topic:
+                return await _forward_to_topic(client, dest, [tm.message for tm in tms], topic)
             return _as_list(await retry(client.forward_messages, dest,
                                         [tm.message for tm in tms]))
         except ChatForwardsRestrictedError:

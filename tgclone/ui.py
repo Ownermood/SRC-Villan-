@@ -265,6 +265,7 @@ def settings_view(app: App) -> Screen:
         f"<b>Protected chats</b> · {'download + re-upload' if c.protected_fallback else 'skip'}\n"
         f"<b>Send via bot</b> · {on_off(c.send_via_bot)}{'' if app.bot and app.user else ' (needs user + bot)'}\n"
         f"<b>Live</b> · edits {on_off(c.live.edit_sync)} · deletes {on_off(c.live.delete_sync)}\n"
+        f"<b>Topics</b> · {'auto-create in groups with topics' if c.topics.enabled else 'off (all in General)'}\n"
         f"<b>Clone delay</b> · {c.past.delay:g}s · <b>Save delay</b> · {c.save.delay:g}s\n"
         f"<b>Limits</b> · file {c.max_file_mb} MB · disk {c.max_disk_mb} MB · {c.max_jobs} jobs\n"
         f"<b>Saved posts go to</b> · {target}</blockquote>"
@@ -277,7 +278,7 @@ def settings_view(app: App) -> Screen:
         [B("↪️ Forward mode" if c.forward_mode else "📨 Copy mode", "sx:forward_mode", "primary"),
          tg("protected_fallback", "Protected", c.protected_fallback)],
         [tg("send_via_bot", "Via bot", c.send_via_bot), tg("edit_sync", "Edit sync", c.live.edit_sync)],
-        [tg("delete_sync", "Delete sync", c.live.delete_sync)],
+        [tg("delete_sync", "Delete sync", c.live.delete_sync), tg("topics", "🗂 Topics", c.topics.enabled)],
         [B("➖", "sd:past:-"), B(f"⏱ Clone {c.past.delay:g}s", "noop"), B("➕", "sd:past:+")],
         [B("➖", "sd:save:-"), B(f"⏱ Save {c.save.delay:g}s", "noop"), B("➕", "sd:save:+")],
         [B("🎯 Save target", "sg"), B("↩️ Reset target", "sgc")],

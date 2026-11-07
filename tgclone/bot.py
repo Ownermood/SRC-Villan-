@@ -440,6 +440,10 @@ class Panel:
                 return await self.show(event, ui.settings_view(app), edit=True)
             if k == "sx":
                 key = parts[1]
+                if key == "topics":
+                    app.cfg.topics.enabled = not app.cfg.topics.enabled
+                    self.save()
+                    return await self.show(event, ui.settings_view(app), edit=True)
                 obj = app.cfg.live if key in ("edit_sync", "delete_sync") else app.cfg
                 if key == "send_via_bot" and not (app.bot and app.user):
                     return await event.answer("Needs both SESSION_STRING and BOT_TOKEN", alert=True)

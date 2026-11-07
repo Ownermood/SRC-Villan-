@@ -116,6 +116,17 @@ Text commands still work (and are the only option for a user account without a b
 ```
 File types: `text photo video gif audio voice video_note sticker document poll contact other`.
 
+## Groups with topics (forums)
+
+Clone a group with topics into another group and each topic is recreated automatically:
+- Topics are created in the source's order with the same title, colour and icon. A premium emoji icon falls back to a colour if refused. A closed topic stays closed.
+- Every post goes into its own topic. Replies stay replies, and albums stay together. General goes to General.
+- Live: a new topic in the source is created in the destination right away. Renaming, closing or reopening a topic is mirrored too.
+- Restarts, resumes and 🔁 re-clones reuse the same topics (no duplicates).
+- If the destination has no topics, the bot turns them on when it is allowed to. Otherwise posts go in without topics.
+- Needed: the sending account must be an **admin with "Manage topics"** in the destination.
+- Switch: ⚙️ Settings → 🗂 Topics (`"topics": {"enabled": true, "auto_enable_forum": true, "sync_edits": true}`).
+
 ## Behaviour notes
 
 - Re-uploaded files keep their original thumbnail, file name, duration and voice/round flags.

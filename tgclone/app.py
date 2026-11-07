@@ -15,6 +15,7 @@ from tgclone.jobs import Job, JobManager
 from tgclone.message import CloneMessage, media_key, send
 from tgclone.plugins import apply_plugins, load_plugins
 from tgclone.storage import Store
+from tgclone.topics import Topics, reply_target, topic_of
 
 log = logging.getLogger("tgclone")
 
@@ -35,6 +36,7 @@ class App:
         self.cfg: Config = load_config(self.cfg_path, self.home)
         self.store = Store(self.home / "tgclone.db")
         self.plugins = load_plugins(self.cfg.plugins, self.home)
+        self.topics = Topics(self)  # forum groups: topic-by-topic cloning
         self.caps: Optional[dict] = None  # limits set by the bot owner (multi-user)
         self.hub = None  # set by Hub
         self.reader: Optional[TelegramClient] = None  # reads source chats
@@ -160,18 +162,24 @@ class App:
         if not tms:
             return 0
         first = tms[0].message
+        src_topic = topic_of(first)
+        replied = reply_target(first)
         done = 0
         try:
             for d in dests:
                 if skip_done and self.store.get_one(src, first.id, d) is not None:
                     continue  # already cloned (resume after crash)
-                reply_to = None
-                if first.reply_to_msg_id:
-                    reply_to = self.store.get_one(src, first.reply_to_msg_id, d)
+                topic = None
+                if src_topic:
+                    try:
+                        topic = await self.topics.dest_topic(src, src_topic, d)
+                    except Exception as e:
+                        log.warning("Topic for %s:%s -> %s failed: %s", src, src_topic, d, e)
+                reply_to = self.store.get_one(src, replied, d) if replied else None
                 try:
-                    sent = await send(self.sender, d, tms, self.cfg, reply_to,
+                    sent = await send(self.sender, d, tms, self.cfg, reply_to or topic,
                                       same_client=self.sender is self.reader,
-                                      progress=progress)
+                                      progress=progress, topic=topic)
                 except Exception as e:
                     log.error("Send %s:%s -> %s failed: %s", src, first.id, d, e)
                     continue
@@ -198,6 +206,12 @@ async def run_forward(app: App, fwd: Forward, fresh: bool = False,
     start = max(fwd.offset, app.store.get_progress(key))
     p = app.cfg.past
     log.info("Cloning %s -> %s from id > %s", src, dests, start)
+    try:  # forum group: create all topics first, in the source's order
+        made = await app.topics.prepare(src, dests)
+        if made:
+            log.info("Topics ready: %s", made)
+    except Exception as e:
+        log.warning("Preparing topics failed (messages still go out): %s", e)
 
     count = 0
     buf: List[Message] = []

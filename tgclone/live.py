@@ -3,10 +3,12 @@
 import logging
 
 from telethon import events
+from telethon.tl import types
 
 from tgclone.app import App
 from tgclone.plugins import apply_plugins
 from tgclone.message import FILE_TYPES, CloneMessage, media_key
+from tgclone.topics import topic_of
 
 log = logging.getLogger("tgclone")
 
@@ -18,7 +20,9 @@ def register(app: App) -> None:
     async def on_new(event):
         if event.chat_id not in app.from_to or event.message.grouped_id:
             return  # albums are handled by on_album
-        if event.message.action is not None:
+        act = event.message.action
+        if act is not None:
+            await _topic_action(app, event.chat_id, event.message, act)
             return
         tms = await app.process([event.message])
         await app.deliver(event.chat_id, tms, app.from_to[event.chat_id])
@@ -86,3 +90,17 @@ async def _safe(coro) -> None:
         await coro
     except Exception as e:
         log.warning("Sync action failed: %s", e)
+
+
+async def _topic_action(app: App, chat: int, msg, act) -> None:
+    """Forum groups: mirror new topics and topic renames / close / reopen."""
+    try:
+        if isinstance(act, types.MessageActionTopicCreate):
+            for d in app.from_to.get(chat, []):
+                await app.topics.dest_topic(chat, msg.id, d)  # the service message id = topic id
+        elif isinstance(act, types.MessageActionTopicEdit):
+            topic = topic_of(msg) or getattr(getattr(msg, "reply_to", None), "reply_to_msg_id", None)
+            if topic:
+                await app.topics.sync_edit(chat, topic, act)
+    except Exception as e:
+        log.warning("Topic sync failed: %s", e)
