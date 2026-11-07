@@ -39,8 +39,9 @@ async def save_range(app: App, chat, first: int, last: int, target: int,
     if not app.user:
         raise RuntimeError("Saving needs a user account (SESSION_STRING).")
     s = app.cfg.save
-    if last - first + 1 > s.max_batch:
-        raise ValueError(f"Range too big ({last - first + 1} > max_batch={s.max_batch})")
+    max_batch = min(s.max_batch, (app.caps or {}).get("max_batch", s.max_batch))
+    if last - first + 1 > max_batch:
+        raise ValueError(f"Range too big ({last - first + 1} > {max_batch} posts per save)")
     sender = app.control  # deliver to the admin through the bot if present
     sent = failed = 0
     buf: List[Message] = []

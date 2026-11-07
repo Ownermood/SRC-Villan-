@@ -29,13 +29,14 @@ def noisy(w=2000, h=2000):
 
 
 def test_save_custom_meets_telegram_limits():
+    cfg0 = Config()
     for data in (png(), noisy()):
-        size = thumbs.save_custom(data)
-        img = Image.open(thumbs.CUSTOM_THUMB)
+        size = thumbs.save_custom(cfg0, data)
+        img = Image.open(thumbs.custom_path(cfg0))
         assert img.format == "JPEG" and max(img.size) <= 320 and size <= 200 * 1024
-    assert thumbs.delete_custom() and not thumbs.has_custom()
+    assert thumbs.delete_custom(cfg0) and not thumbs.has_custom(cfg0)
     try:
-        thumbs.save_custom(b"not an image")
+        thumbs.save_custom(cfg0, b"not an image")
         assert False
     except ValueError:
         pass
@@ -45,9 +46,9 @@ def test_policy():
     cfg = Config()
     assert thumbs.policy(cfg, "video") == "original"
     cfg.thumb.mode = "custom"
-    thumbs.delete_custom()
+    thumbs.delete_custom(Config())
     assert thumbs.policy(cfg, "video") == "original", "custom without image falls back"
-    thumbs.save_custom(png())
+    thumbs.save_custom(Config(), png())
     assert thumbs.policy(cfg, "video") == "custom" and thumbs.policy(cfg, "document") == "custom"
     assert thumbs.policy(cfg, "photo") == "original" and thumbs.policy(cfg, "sticker") == "original"
     cfg.thumb.types = ["document"]
@@ -57,15 +58,15 @@ def test_policy():
 
 
 def test_send_with_custom_and_removed_thumb():
-    thumbs.save_custom(png())
+    thumbs.save_custom(Config(), png())
     cfg = Config()
     cfg.thumb.mode = "custom"
     c = Client()  # same client, not protected: would normally be a reference copy
     run(send(c, 7, [CloneMessage(Msg(1, "pdf", media="M", kind="document"))], cfg))
-    assert c.calls[0][0] == "file" and c.calls[0][5] == str(thumbs.CUSTOM_THUMB)
+    assert c.calls[0][0] == "file" and c.calls[0][5] == str(thumbs.custom_path(Config()))
     c = Client()
     run(send(c, 7, [CloneMessage(Msg(1, "v", media="M", kind="video"))], cfg))
-    assert c.calls[0][5] == str(thumbs.CUSTOM_THUMB)
+    assert c.calls[0][5] == str(thumbs.custom_path(Config()))
     cfg.thumb.mode = "none"
     c = Client()
     run(send(c, 7, [CloneMessage(Msg(1, "v", media="M", kind="video"))], cfg))
@@ -80,7 +81,7 @@ def test_send_with_custom_and_removed_thumb():
 
 
 def test_album_gets_custom_thumb():
-    thumbs.save_custom(png())
+    thumbs.save_custom(Config(), png())
     cfg = Config()
     cfg.thumb.mode = "custom"
     c = Client()
@@ -90,7 +91,7 @@ def test_album_gets_custom_thumb():
     files = c.calls[-1][2]
     assert len(r) == 3
     assert all(isinstance(f, types.InputMediaUploadedDocument) for f in files[:2])
-    assert files[0].thumb == f"H:{thumbs.CUSTOM_THUMB}"
+    assert files[0].thumb == f"H:{thumbs.custom_path(Config())}"
     assert isinstance(files[2], str), "photo stays a plain upload"
 
 
@@ -109,7 +110,7 @@ async def _say(p, ev):
 
 def test_panel_thumbnail_flow():
     from test_panel import press, styles
-    thumbs.delete_custom()
+    thumbs.delete_custom(Config())
     a = make_app()
     p = run(bot.setup(a, live=True))
     ev = run(press(p, "th"))
@@ -120,19 +121,19 @@ def test_panel_thumbnail_flow():
     ev = run(_say(p, TextEvent("hello")))
     assert "Send a photo" in ev.out[-1][0] and p.state[1]["kind"] == "thumb"
     ev = run(_say(p, TextEvent("", image=png())))
-    assert thumbs.has_custom() and a.cfg.thumb.mode == "custom" and 1 not in p.state
-    assert ev.out[0][2] == str(thumbs.CUSTOM_THUMB), "preview sent back"
+    assert thumbs.has_custom(Config()) and a.cfg.thumb.mode == "custom" and 1 not in p.state
+    assert ev.out[0][2] == str(thumbs.custom_path(Config())), "preview sent back"
     run(press(p, "tht:audio"))
     assert "audio" not in a.cfg.thumb.types
     run(press(p, "thm:none"))
     assert a.cfg.thumb.mode == "none"
     run(press(p, "thd"))
-    assert not thumbs.has_custom()
+    assert not thumbs.has_custom(Config())
     # /setthumb as photo caption, /delthumb
     run(_say(p, TextEvent("/setthumb", image=png(alpha=False))))
-    assert thumbs.has_custom() and a.cfg.thumb.mode == "custom"
+    assert thumbs.has_custom(Config()) and a.cfg.thumb.mode == "custom"
     ev = run(_say(p, TextEvent("/delthumb")))
-    assert not thumbs.has_custom() and a.cfg.thumb.mode == "original" and "removed" in ev.out[-1][0]
+    assert not thumbs.has_custom(Config()) and a.cfg.thumb.mode == "original" and "removed" in ev.out[-1][0]
     ev = run(_say(p, TextEvent("/setthumb")))  # no photo -> wizard
     assert p.state[1]["kind"] == "thumb"
     from telethon import TelegramClient

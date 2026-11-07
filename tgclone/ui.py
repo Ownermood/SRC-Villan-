@@ -94,6 +94,12 @@ async def main_menu(app: App) -> Screen:
         [B("🧩 Plugins", "pl"), B("⚙️ Settings", "st")],
         [B("🔄 Refresh", "m"), B("❔ Help", "hp")],
     ]
+    hub = getattr(app, "hub", None)
+    if hub is not None:
+        extra = [B("👤 Account", "ac")]
+        if app.uid == hub.owner:
+            extra.append(B("🛡 Admin", "ad", "primary"))
+        buttons.insert(3, extra)
     return text, buttons
 
 
@@ -224,9 +230,9 @@ OCR_LANGS = ["eng", "eng+hin", "hin"]
 
 
 def mark_logo_ok(app: App) -> bool:
-    from tgclone.plugins.mark import LOGO
+    from tgclone.plugins.mark import logo_file
     img = app.cfg.plugins.mark.image
-    return bool(img) or LOGO.exists()
+    return bool(img) or logo_file(app.cfg.home).exists()
 
 
 def cycle(options: list, current):
@@ -288,7 +294,7 @@ THUMB_TYPES_UI = [("video", "🎬 Video"), ("document", "📄 PDF / File"),
 
 def thumb_view(app: App) -> Screen:
     t = app.cfg.thumb
-    custom = thumbs.has_custom()
+    custom = thumbs.has_custom(app.cfg)
     warn = ""
     if t.mode == "custom" and not custom:
         warn = "\n⚠️ No image uploaded yet — originals are used until you upload one."
@@ -412,3 +418,153 @@ def wizard_apply(kind: str, app: App, text: str) -> str:
         p.caption.footer = ("\n" if value and not value.startswith("\n") else "") + value
     p.caption.check = bool(p.caption.header or p.caption.footer)
     return "🧾 Caption saved"
+
+
+# ================================================================== multi-user
+def mask_phone(phone: str) -> str:
+    p = (phone or "").lstrip("+")
+    return f"+{p[:2]}••••••{p[-2:]}" if len(p) > 4 else "—"
+
+
+def welcome(owner_only: bool = False, pending: bool = False) -> Screen:
+    text = (
+        "<b>⚡ tgclone</b> · <i>Telegram cloner bot</i>\n\n<blockquote>"
+        "📡 Auto-forward channels in real time\n"
+        "🔁 Copy a channel's full history — even protected ones\n"
+        "📥 Save restricted posts from any link\n"
+        "🖼 Custom thumbnail · 💧 watermark · 🧹 filters</blockquote>\n"
+        "🔐 Log in once with your Telegram account — everything happens right here in the chat.\n"
+        "<i>Your login is stored encrypted. Log out anytime with /logout "
+        "(it also shows in Telegram → Settings → Devices).</i>"
+    )
+    if owner_only:
+        return text + "\n\n🔒 This bot is private.", None
+    if pending:
+        return text + "\n\n⏳ Your access request is waiting for the owner's approval.", None
+    return text, [[B("🔐 Login with Telegram", "lg", "success")], [B("❔ How it works", "hw")]]
+
+
+HOW = """<b>❔ How it works</b>
+
+1️⃣ <b>Login</b> — tap 🔐 Login, share your number with the button, type the code on the keypad.
+2️⃣ <b>Forward</b> — ➕ New forward → forward a message from the source channel → then from your channel → ✅ Done.
+3️⃣ <b>Relax</b> — new posts are copied automatically. 🔁 Clone history copies old posts too.
+
+<blockquote>Why a login? Bots can't read channel history or protected channels — your account can.
+Your account must be a member of the source and an admin of the destination.</blockquote>"""
+
+
+def login_phone() -> str:
+    return ("<b>🔐 Login · step 1/3</b>\n\nTap <b>📱 Share my number</b> below "
+            "(or type it with country code, e.g. <code>+919876543210</code>).\n\n"
+            "<i>Send /cancel to stop.</i>")
+
+
+def keypad(digits: str, note: str = "") -> Screen:
+    shown = " ".join(list(digits) + ["_"] * max(0, 5 - len(digits)))
+    text = ("<b>🔐 Login · step 2/3</b>\n\nEnter the code Telegram sent to your "
+            "<b>Telegram app</b> using the buttons:\n\n"
+            f"<blockquote><code>{esc(shown)}</code></blockquote>\n"
+            "⚠️ <i>Don't send the code as a message — Telegram blocks codes shared in chats.</i>")
+    if note:
+        text += f"\n\n{note}"
+    rows = [[B(str(n), f"otp:{n}") for n in r] for r in ((1, 2, 3), (4, 5, 6), (7, 8, 9))]
+    rows.append([B("⌫", "otp:b"), B("0", "otp:0"), B("✅ Done", "otp:ok", "success")])
+    rows.append([B("🔄 New code", "otp:r"), B("✖️ Cancel", "otp:x", "danger")])
+    return text, rows
+
+
+def login_password(note: str = "") -> Screen:
+    return ("<b>🔐 Login · step 3/3</b>\n\nYour account has a <b>two-step password</b>. "
+            "Send it as a message — I delete it immediately." + (f"\n\n{note}" if note else ""),
+            [[B("✖️ Cancel", "otp:x", "danger")]])
+
+
+def account_view(info: dict, uid: int) -> Screen:
+    import datetime
+    since = datetime.datetime.fromtimestamp(info.get("created") or 0).strftime("%d %b %Y")
+    return ("<b>👤 Account</b>\n\n<blockquote>"
+            f"<b>Telegram</b> · {esc(info.get('name') or '—')}\n"
+            f"<b>Phone</b> · {mask_phone(info.get('phone'))}\n"
+            f"<b>Your id</b> · <code>{uid}</code>\n<b>Since</b> · {since}</blockquote>\n"
+            "<i>Logging out ends this bot's session on Telegram. Your forwards and settings stay "
+            "saved unless you delete them.</i>",
+            [[B("🚪 Logout", "lo", "danger")], [B("« Back", "m")]])
+
+
+def admin_view(hub) -> Screen:
+    st = hub.settings
+    c = hub.acc.counts()
+    running = sum(len(app.jobs.running()) for app, _ in hub.ws.values())
+    up = int(__import__("time").time() - hub.started)
+    text = ("<b>🛡 Admin</b>\n\n<blockquote>"
+            f"<b>Users</b> · {c['users']} logged in · {len(hub.ws)} online\n"
+            f"<b>Jobs</b> · {running} running (max {st.max_total_jobs})\n"
+            f"<b>Access</b> · {dict(open='🌍 anyone', approve='✅ approved users', owner='🔒 only me')[st.mode]}"
+            f" · ⏳ {c['pending']} pending · ⛔ {c['banned']} banned\n"
+            f"<b>Per user</b> · {st.user_max_jobs} jobs · {st.user_max_batch} posts/save\n"
+            f"<b>Uptime</b> · {up // 3600}h {up % 3600 // 60}m</blockquote>")
+
+    def mode(key, label):
+        on = st.mode == key
+        return B(("● " if on else "") + label, f"adm:{key}", "primary" if on else None)
+
+    rows = [
+        [mode("open", "🌍 Open"), mode("approve", "✅ Approval"), mode("owner", "🔒 Only me")],
+        [B("👥 Users", "adu:0"), B(f"⏳ Requests ({c['pending']})", "adp",
+                                   "success" if c["pending"] else None)],
+        [B("➖", "adj:-"), B(f"⏳ {st.user_max_jobs} jobs", "noop"), B("➕", "adj:+")],
+        [B("➖", "adx:-"), B(f"📥 {st.user_max_batch}/save", "noop"), B("➕", "adx:+")],
+        [B("🔄 Refresh", "ad"), B("« Back", "m")],
+    ]
+    return text, rows
+
+
+def admin_users(hub, page: int = 0) -> Screen:
+    users = hub.acc.users()
+    banned = hub.acc.by_state("banned")
+    known = {u["uid"] for u in users}
+    users += [{"uid": b["uid"], "name": b["name"], "banned": True} for b in banned
+              if b["uid"] not in known]
+    pages = max(1, (len(users) + PAGE - 1) // PAGE)
+    page = max(0, min(page, pages - 1))
+    rows = []
+    for u in users[page * PAGE:(page + 1) * PAGE]:
+        icon = "⛔" if hub.acc.access(u["uid"]) == "banned" else ("🟢" if u["uid"] in hub.ws else "⚪")
+        rows.append([B(f"{icon} {(u.get('name') or '?')[:24]} · {u['uid']}", f"adv:{u['uid']}")])
+    nav = []
+    if page > 0:
+        nav.append(B("‹ Prev", f"adu:{page - 1}"))
+    if page < pages - 1:
+        nav.append(B("Next ›", f"adu:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([B("« Back", "ad")])
+    return f"<b>👥 Users</b> · {len(users)}\n<i>🟢 online · ⚪ offline · ⛔ banned</i>", rows
+
+
+def admin_user(hub, uid: int) -> Screen:
+    info = hub.acc.info(uid) or {}
+    banned = hub.acc.access(uid) == "banned"
+    ws = hub.ws.get(uid)
+    jobs = len(ws[0].jobs.running()) if ws else 0
+    fwds = len(ws[0].cfg.forwards) if ws else 0
+    text = (f"<b>👤 {esc(info.get('name') or uid)}</b>\n\n<blockquote>"
+            f"<b>Id</b> · <code>{uid}</code>\n<b>Phone</b> · {mask_phone(info.get('phone'))}\n"
+            f"<b>Status</b> · {'⛔ banned' if banned else ('🟢 online' if ws else '⚪ offline')}\n"
+            f"<b>Forwards</b> · {fwds} · <b>Jobs</b> · {jobs}</blockquote>")
+    rows = [[B("✅ Unban", f"adb:{uid}", "success") if banned else B("⛔ Ban", f"adb:{uid}", "danger")]]
+    if info:
+        rows.append([B("🚪 Force logout", f"adl:{uid}", "danger")])
+    rows.append([B("« Users", "adu:0")])
+    return text, rows
+
+
+def admin_pending(hub) -> Screen:
+    pend = hub.acc.by_state("pending")
+    if not pend:
+        return "<b>⏳ Requests</b>\n\nNo pending requests.", [[B("« Back", "ad")]]
+    rows = [[B(f"✅ {(p['name'] or '?')[:18]} · {p['uid']}", f"ap:{p['uid']}", "success"),
+             B("✖️", f"dn:{p['uid']}", "danger")] for p in pend[:PAGE]]
+    rows.append([B("« Back", "ad")])
+    return f"<b>⏳ Requests</b> · {len(pend)}\nApprove or deny:", rows

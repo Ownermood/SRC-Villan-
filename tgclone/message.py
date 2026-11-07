@@ -4,6 +4,7 @@ import asyncio
 import logging
 import mimetypes
 import os
+import uuid
 from typing import List, Optional
 
 from telethon import TelegramClient
@@ -95,7 +96,8 @@ class CloneMessage:
         DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
         await _wait_disk(size, max_disk_mb)
         cb = (lambda c, t: progress("down", c, t)) if progress else None
-        path = await self.message.download_media(file=str(DOWNLOAD_DIR) + os.sep,
+        # unique name: parallel jobs / users never overwrite each other's files
+        path = await self.message.download_media(file=str(DOWNLOAD_DIR / uuid.uuid4().hex),
                                                  progress_callback=cb)
         if not path:
             raise FileNotFoundError("download failed")
@@ -111,7 +113,7 @@ class CloneMessage:
         try:
             DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
             path = await self.message.download_media(
-                file=str(DOWNLOAD_DIR / f"thumb_{self.message.id}_{doc.id}.jpg"), thumb=-1)
+                file=str(DOWNLOAD_DIR / f"thumb_{uuid.uuid4().hex}.jpg"), thumb=-1)
         except Exception as e:  # thumbnail is cosmetic, never fail the send
             log.debug("Thumb download failed: %s", e)
             return None
@@ -210,7 +212,7 @@ async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
         if not tm.new_file:
             thumb = await thumbs.pick(cfg, tm)
         elif thumbs.policy(cfg, tm.file_type) == "custom":
-            thumb = str(thumbs.CUSTOM_THUMB)
+            thumb = str(thumbs.custom_path(cfg))
         if thumb:
             kw["thumb"] = thumb
         return _as_list(await retry(client.send_file, dest, path, caption=text,

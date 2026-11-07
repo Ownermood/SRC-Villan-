@@ -12,8 +12,8 @@ from tgclone.plugins import Plugin
 class Ocr(Plugin):
     id_ = "ocr"
 
-    def __init__(self, cfg) -> None:
-        super().__init__(cfg)
+    def __init__(self, cfg, home=None) -> None:
+        super().__init__(cfg, *([home] if home else []))
         if not shutil.which("tesseract"):
             raise RuntimeError("tesseract program not installed (apt install tesseract-ocr)")
         missing = set(cfg.lang.split("+")) - set(pytesseract.get_languages(config=""))

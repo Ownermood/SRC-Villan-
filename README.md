@@ -9,14 +9,18 @@ One clean Telethon tool that merges **5 projects**:
 | clonechat | protected-content clone (download + re-upload), resume, file-type filter, per-message delay |
 | Save-Restricted-Content-Bot v2 / v3 | save posts from `t.me` links (public, private `/c/`, topic links), `/batch`, `/stop`, save target chat |
 
+**Multi-user bot**: anyone can use it from Telegram alone. Users log in inside the bot (📱 share number → code on a button keypad → 2FA). Every user gets their own forwards, settings, thumbnail, logo and jobs. Saved logins are encrypted (Fernet). The owner gets an 🛡 Admin panel: open / approval / private mode, ban, force logout, per-user limits.
+
 Not kept (on purpose): premium/payment/redeem codes, ad shortener, `/eval` (remote code execution),
-speedtest, broadcast, yt-dlp downloader, MongoDB, multi-user session storage, Dropbox-hosted
-pyrogram forks and `devgagantools` (unverifiable dependencies), obfuscated promo strings.
+speedtest, broadcast, yt-dlp downloader, MongoDB, Dropbox-hosted pyrogram forks and
+`devgagantools` (unverifiable dependencies), obfuscated promo strings.
 
 ## Screenshots
 
 ![Main menu, forwards, jobs](docs/screenshots/tgclone_ui_1.png)
 ![Plugins, settings, thumbnail](docs/screenshots/tgclone_ui_2.png)
+![Login inside Telegram, account](docs/screenshots/tgclone_users_1.png)
+![Owner admin panel](docs/screenshots/tgclone_users_2.png)
 
 ## Ubuntu quick start
 
@@ -25,10 +29,10 @@ pyrogram forks and `devgagantools` (unverifiable dependencies), obfuscated promo
 ```bash
 git clone -b ccr-1f6db1cf-flau3n https://github.com/Ownermood/SRC-Villan-.git && cd SRC-Villan-
 bash scripts/install_ubuntu.sh --service   # packages + venv + systemd service
-nano .env                                  # API_ID, API_HASH, BOT_TOKEN, ADMINS
-.venv/bin/python -m tgclone login          # paste SESSION_STRING into .env
-sudo systemctl start tgclone               # runs 24x7, send /start to your bot
+.venv/bin/python -m tgclone setup          # 4 questions -> .env (owner, once)
+sudo systemctl start tgclone               # runs 24x7 -> open your bot -> /start -> 🔐 Login
 ```
+Users never touch a terminal. They open the bot, log in and use the buttons.
 
 ## Setup
 
@@ -57,9 +61,11 @@ Logs are written to `data/tgclone.log` (rotating, 3 × 5 MB).
 
 | `.env` | Result |
 |---|---|
-| `SESSION_STRING` only | the user account does everything, commands use `.` from your own account |
-| `BOT_TOKEN` only | live mode only (the bot must be an admin in the source chat), no history or save |
-| both (recommended) | the user account reads, the bot is the control panel. With `send_via_bot: true` the bot also sends. |
+| `BOT_TOKEN` + `OWNER_ID` (recommended) | **multi-user bot**: every user logs in inside the bot. A `SESSION_STRING`, if set, becomes the owner's account. |
+| `SESSION_STRING` only | old single-user userbot: `.` commands from your own account |
+
+Per-user files: `data/users/<telegram id>/` (config.json, tgclone.db, thumbnail, logo).
+Logins: `data/accounts.db` (encrypted with `SECRET_KEY` or `data/secret.key`).
 
 ## Control panel (bot)
 

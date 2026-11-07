@@ -6,9 +6,10 @@ modify() returns the CloneMessage (kept) or None (dropped). It can be sync or as
 import importlib
 import inspect
 import logging
+from pathlib import Path
 from typing import List, Optional
 
-from tgclone.config import PluginConfig
+from tgclone.config import DATA_DIR, PluginConfig
 from tgclone.message import CloneMessage
 
 log = logging.getLogger("tgclone")
@@ -20,14 +21,15 @@ STYLE_CODES = {"bold": "**", "italics": "__", "code": "`", "strike": "~~", "plai
 class Plugin:
     id_ = "plugin"
 
-    def __init__(self, cfg) -> None:
+    def __init__(self, cfg, home: Path = DATA_DIR) -> None:
         self.cfg = cfg
+        self.home = Path(home)  # the user's folder (logo etc.)
 
     def modify(self, tm: CloneMessage) -> Optional[CloneMessage]:
         return tm
 
 
-def load_plugins(cfg: PluginConfig) -> List[Plugin]:
+def load_plugins(cfg: PluginConfig, home: Path = DATA_DIR) -> List[Plugin]:
     out: List[Plugin] = []
     for pid in ORDER:
         section = getattr(cfg, pid)
@@ -35,7 +37,7 @@ def load_plugins(cfg: PluginConfig) -> List[Plugin]:
             continue
         try:
             mod = importlib.import_module(f"tgclone.plugins.{pid}")
-            out.append(mod.PLUGIN(section))
+            out.append(mod.PLUGIN(section, home))
             log.info("Plugin loaded: %s", pid)
         except Exception as e:  # missing optional dependency etc.
             log.error("Plugin %s not loaded: %s", pid, e)

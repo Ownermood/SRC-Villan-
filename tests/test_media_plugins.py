@@ -59,7 +59,7 @@ def test_ocr_reads_text(tmp_path):
 def test_watermark_video_keeps_audio_and_photo(tmp_path):
     from tgclone.plugins import mark
     logo = Image.new("RGBA", (300, 120), (255, 0, 0, 160))
-    logo.save(mark.LOGO)
+    logo.save(mark.logo_file(DATA_DIR))
     video = tmp_path / "v.mp4"
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
                     "testsrc=size=640x360:rate=25:duration=2", "-f", "lavfi", "-i",
@@ -96,8 +96,8 @@ def test_watermark_video_keeps_audio_and_photo(tmp_path):
 @need_ffmpeg
 def test_watermark_needs_logo():
     from tgclone.plugins import mark
-    if mark.LOGO.exists():
-        mark.LOGO.unlink()
+    if mark.logo_file(DATA_DIR).exists():
+        mark.logo_file(DATA_DIR).unlink()
     with pytest.raises(RuntimeError, match="logo"):
         mark.Mark(Config().plugins.mark)
 
@@ -118,8 +118,8 @@ def test_panel_logo_upload_and_cycles():
     from fakes import TextEvent, make_app
     from tgclone import bot
     from tgclone.plugins import mark
-    if mark.LOGO.exists():
-        mark.LOGO.unlink()
+    if mark.logo_file(DATA_DIR).exists():
+        mark.logo_file(DATA_DIR).unlink()
     a = make_app()
     p = run(bot.setup(a, live=True))
     ev = run(press(p, "wl"))
@@ -127,8 +127,8 @@ def test_panel_logo_upload_and_cycles():
     buf = io.BytesIO()
     Image.new("RGBA", (2000, 500), (0, 0, 255, 128)).save(buf, "PNG")
     ev = run(_say(p, TextEvent("", image=buf.getvalue())))
-    assert mark.LOGO.exists() and max(Image.open(mark.LOGO).size) <= 1024
-    assert Image.open(mark.LOGO).mode == "RGBA", "transparency kept"
+    assert mark.logo_file(DATA_DIR).exists() and max(Image.open(mark.logo_file(DATA_DIR)).size) <= 1024
+    assert Image.open(mark.logo_file(DATA_DIR)).mode == "RGBA", "transparency kept"
     assert a.cfg.plugins.mark.check and any(x.id_ == "mark" for x in a.plugins)
     assert "watermark is on" in ev.out[0][0]
     run(press(p, "wp"))

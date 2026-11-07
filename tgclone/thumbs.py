@@ -9,25 +9,32 @@ import io
 import logging
 from typing import Optional
 
-from tgclone.config import DATA_DIR, Config
+from pathlib import Path
+
+from tgclone.config import Config
 
 log = logging.getLogger("tgclone")
 
-CUSTOM_THUMB = DATA_DIR / "custom_thumb.jpg"
 THUMB_TYPES = ("video", "document", "audio", "gif")
 MAX_SIDE = 320  # Telegram limit
 MAX_BYTES = 200 * 1024  # Telegram limit
 
 
-def has_custom() -> bool:
-    return CUSTOM_THUMB.exists() and CUSTOM_THUMB.stat().st_size > 0
+def custom_path(cfg: Config) -> Path:
+    """Each user has their own thumbnail inside their home folder."""
+    return cfg.home / "custom_thumb.jpg"
+
+
+def has_custom(cfg: Config) -> bool:
+    p = custom_path(cfg)
+    return p.exists() and p.stat().st_size > 0
 
 
 def policy(cfg: Config, file_type: str) -> str:
     """'original' | 'custom' | 'none' for this file type."""
     if file_type not in THUMB_TYPES or file_type not in cfg.thumb.types:
         return "original"
-    if cfg.thumb.mode == "custom" and not has_custom():
+    if cfg.thumb.mode == "custom" and not has_custom(cfg):
         return "original"
     return cfg.thumb.mode if cfg.thumb.mode in ("custom", "none") else "original"
 
@@ -36,7 +43,7 @@ def needs_reupload(cfg: Config, file_type: str) -> bool:
     return policy(cfg, file_type) != "original"
 
 
-def save_custom(image: bytes) -> int:
+def save_custom(cfg: Config, image: bytes) -> int:
     """Convert any image to a Telegram-valid JPEG thumbnail. Returns size in bytes."""
     try:
         from PIL import Image
@@ -59,17 +66,19 @@ def save_custom(image: bytes) -> int:
         img.save(buf, "JPEG", quality=quality, optimize=True)
         if buf.tell() <= MAX_BYTES:
             break
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = CUSTOM_THUMB.with_suffix(".tmp")
+    target = custom_path(cfg)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(".tmp")
     tmp.write_bytes(buf.getvalue())
-    tmp.replace(CUSTOM_THUMB)
+    tmp.replace(target)
     log.info("Custom thumbnail saved (%sx%s, %s bytes)", *img.size, buf.tell())
     return buf.tell()
 
 
-def delete_custom() -> bool:
-    if CUSTOM_THUMB.exists():
-        CUSTOM_THUMB.unlink()
+def delete_custom(cfg: Config) -> bool:
+    p = custom_path(cfg)
+    if p.exists():
+        p.unlink()
         return True
     return False
 
@@ -80,5 +89,5 @@ async def pick(cfg: Config, tm) -> Optional[str]:
     if pol == "none":
         return None
     if pol == "custom":
-        return str(CUSTOM_THUMB)
+        return str(custom_path(cfg))
     return await tm.download_thumb()

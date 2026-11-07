@@ -17,7 +17,11 @@ from tgclone.plugins import Plugin
 
 log = logging.getLogger("tgclone")
 
-LOGO = DATA_DIR / "watermark.png"  # uploaded from the bot
+LOGO_NAME = "watermark.png"  # uploaded from the bot, inside the user's folder
+
+
+def logo_file(home: Path) -> Path:
+    return Path(home) / LOGO_NAME
 POSITIONS = {
     "top_left": "10:10",
     "top_right": "W-w-10:10",
@@ -28,10 +32,10 @@ POSITIONS = {
 TIMEOUT = 1800  # seconds per file
 
 
-def logo_path(image: str) -> Path:
+def logo_path(image: str, home: Path = DATA_DIR) -> Path:
     """Configured logo: uploaded file, local path or https URL (cached)."""
     if not image:
-        return LOGO
+        return logo_file(home)
     if not image.startswith("https://"):
         return Path(image)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -78,11 +82,11 @@ async def run_ffmpeg(cmd: list) -> None:
 class Mark(Plugin):
     id_ = "mark"
 
-    def __init__(self, cfg) -> None:
-        super().__init__(cfg)
+    def __init__(self, cfg, home: Path = DATA_DIR) -> None:
+        super().__init__(cfg, home)
         if not shutil.which("ffmpeg"):
             raise RuntimeError("ffmpeg program not installed (apt install ffmpeg)")
-        if not logo_path(cfg.image).exists():
+        if not logo_path(cfg.image, home).exists():
             raise RuntimeError("no watermark logo (upload one from Plugins → Watermark logo)")
 
     async def modify(self, tm):
@@ -92,7 +96,7 @@ class Mark(Plugin):
         video = tm.file_type != "photo"
         out = str(DOWNLOAD_DIR / f"wm_{os.path.splitext(os.path.basename(src))[0]}"
                                  f"{'.mp4' if video else '.jpg'}")
-        await run_ffmpeg(build_cmd(src, str(logo_path(self.cfg.image)), out,
+        await run_ffmpeg(build_cmd(src, str(logo_path(self.cfg.image, self.home)), out,
                                    self.cfg.position, self.cfg.size, video, self.cfg.frame_rate))
         tm.new_file = out
         tm.track(out)

@@ -29,9 +29,10 @@ BOT_COMMANDS = {
 
 
 class Panel:
-    def __init__(self, app: App, live: bool) -> None:
+    def __init__(self, app: App, live: bool, hub=None) -> None:
         self.app = app
         self.live = live
+        self.hub = hub  # multi-user bot (None = single-user mode)
         self.c = app.control
         self.is_bot = self.c is app.bot
         self.p = "/" if self.is_bot else "."
@@ -103,7 +104,8 @@ class Panel:
         raise ValueError("Send a photo (or an image file).")
 
     async def set_logo(self, event, msg):
-        from tgclone.plugins.mark import LOGO
+        from tgclone.plugins.mark import logo_file
+        LOGO = logo_file(self.app.cfg.home)
         import io
         from PIL import Image
         try:
@@ -128,18 +130,21 @@ class Panel:
         return await self.show(event, ui.plugins_view(self.app))
 
     async def set_thumb(self, event, msg):
-        size = thumbs.save_custom(await self.image_from(msg))
+        size = thumbs.save_custom(self.app.cfg, await self.image_from(msg))
         self.app.cfg.thumb.mode = "custom"
         self.save()
         self.state.pop(event.sender_id, None)
         await event.respond(f"✅ Thumbnail saved ({size // 1024} KB) and mode set to <b>My image</b>.",
-                            file=str(thumbs.CUSTOM_THUMB), parse_mode="html")
+                            file=str(thumbs.custom_path(self.app.cfg)), parse_mode="html")
         return await self.show(event, ui.thumb_view(self.app))
 
     # ------------------------------------------------------------- jobs
     async def run_job(self, event, job: Job, fn):
         """Start a job and keep a live progress card updated."""
-        self.app.jobs.max_jobs = self.app.cfg.max_jobs
+        caps = self.app.caps or {}
+        self.app.jobs.max_jobs = min(self.app.cfg.max_jobs, caps.get("max_jobs", 99))
+        if self.hub:
+            self.hub.check_capacity()  # all users together
         self.app.jobs.check(job)  # fail fast before sending a card
         card = await self.show(event, ui.job_card(job))
         done = asyncio.Event()
@@ -273,7 +278,7 @@ class Panel:
                 self.state[event.sender_id] = {"kind": "thumb"}
                 return await self.show(event, ui.wizard_prompt("thumb", app))
         if name == "delthumb":
-            thumbs.delete_custom()
+            thumbs.delete_custom(app.cfg)
             if app.cfg.thumb.mode == "custom":
                 app.cfg.thumb.mode = "original"
             self.save()
@@ -457,7 +462,7 @@ class Panel:
                     return await event.answer("Unknown mode")
                 app.cfg.thumb.mode = parts[1]
                 self.save()
-                if parts[1] == "custom" and not thumbs.has_custom():
+                if parts[1] == "custom" and not thumbs.has_custom(app.cfg):
                     self.state[uid] = {"kind": "thumb"}
                     await event.answer("Now send your image")
                     return await self.show(event, ui.wizard_prompt("thumb", app), edit=True)
@@ -467,12 +472,12 @@ class Panel:
                 self.state[uid] = {"kind": "thumb"}
                 return await self.show(event, ui.wizard_prompt("thumb", app), edit=True)
             if k == "thp":
-                if not thumbs.has_custom():
+                if not thumbs.has_custom(app.cfg):
                     return await event.answer("No image uploaded yet", alert=True)
                 await event.answer()
-                return await event.respond("👁 Your current thumbnail", file=str(thumbs.CUSTOM_THUMB))
+                return await event.respond("👁 Your current thumbnail", file=str(thumbs.custom_path(app.cfg)))
             if k == "thd":
-                thumbs.delete_custom()
+                thumbs.delete_custom(app.cfg)
                 if app.cfg.thumb.mode == "custom":
                     app.cfg.thumb.mode = "original"
                 self.save()

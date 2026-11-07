@@ -119,11 +119,15 @@ class Sent:
 
 
 class TextEvent:
-    def __init__(self, text, sender=1, fwd_from=None, image=None):
-        self.raw_text, self.sender_id, self.is_private, self.chat_id = text, sender, True, 1
+    def __init__(self, text, sender=1, fwd_from=None, image=None, contact=None):
+        self.raw_text, self.sender_id, self.is_private, self.chat_id = text, sender, True, sender
         self.message = Msg(1, text, fwd_from=fwd_from, kind="photo" if image else None)
         self.message.image_bytes = image
+        self.message.contact = contact
         self.out = []
+
+    async def get_sender(self):
+        return _t.SimpleNamespace(id=self.sender_id, first_name=f"User{self.sender_id}", last_name=None)
 
     async def respond(self, text, **kw):
         self.out.append((text, kw.get("buttons"), kw.get("file")))
@@ -145,7 +149,10 @@ class CallbackEvent(events.CallbackQuery.Event):
 
     @property
     def chat_id(self):
-        return 1
+        return self._sender_id
+
+    async def get_sender(self):
+        return _t.SimpleNamespace(id=self._sender_id, first_name=f"User{self._sender_id}", last_name=None)
 
     async def edit(self, text, **kw):
         self.edits.append((text, kw.get("buttons")))
@@ -171,6 +178,7 @@ def make_app(client=None):
     a.cfg.past.delay = a.cfg.save.delay = 0
     a.store = Store(Path(DATA_DIR) / f"t{next(_ids)}.db")
     a.plugins, a.admins, a.from_to, a.titles = [], {1}, {}, {}
+    a.caps, a.hub, a.uid, a.home = None, None, 1, Path(DATA_DIR)
     c = client or Client()
     a.reader = a.sender = a.user = a.control = a.bot = c
     a.jobs = JobManager(3)

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Union
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 load_dotenv()
 log = logging.getLogger("tgclone")
@@ -129,25 +129,35 @@ class Config(BaseModel):
     save: SaveSettings = SaveSettings()
     thumb: ThumbSettings = ThumbSettings()
     plugins: PluginConfig = PluginConfig()
+    # folder holding this user's files (thumbnail, logo, db); not saved in the json
+    _home: Path = PrivateAttr(default_factory=lambda: DATA_DIR)
+
+    @property
+    def home(self) -> Path:
+        return self._home
 
 
-def load_config() -> Config:
-    if not CONFIG_FILE.exists():
+def load_config(path: Path = None, home: Path = None) -> Config:
+    path = Path(path or CONFIG_FILE)
+    if not path.exists():
         cfg = Config()
-        save_config(cfg)
-        log.warning("Created default %s - add your forwards there.", CONFIG_FILE)
-        return cfg
-    return Config.model_validate_json(CONFIG_FILE.read_text(encoding="utf8"))
+        save_config(cfg, path)
+        log.info("Created default %s", path)
+    else:
+        cfg = Config.model_validate_json(path.read_text(encoding="utf8"))
+    cfg._home = Path(home) if home else DATA_DIR
+    return cfg
 
 
-def save_config(cfg: Config) -> None:
+def save_config(cfg: Config, path: Path = None) -> None:
     """Atomic write: never leaves a half-written config on crash."""
-    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=CONFIG_FILE.parent or ".", suffix=".tmp")
+    path = Path(path or CONFIG_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf8") as f:
             json.dump(cfg.model_dump(), f, indent=2, ensure_ascii=False)
-        os.replace(tmp, CONFIG_FILE)
+        os.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
             os.remove(tmp)
@@ -162,6 +172,9 @@ class Secrets:
         self.api_hash = os.getenv("API_HASH", "")
         self.session_string = os.getenv("SESSION_STRING", "")
         self.bot_token = os.getenv("BOT_TOKEN", "")
+        owner = os.getenv("OWNER_ID", "").strip()
+        self.owner_id = int(owner) if owner.lstrip("-").isdigit() else 0
+        self.secret_key = os.getenv("SECRET_KEY", "")
         self.admins = [a.strip() for a in os.getenv("ADMINS", "").split(",") if a.strip()]
 
     def check(self) -> None:

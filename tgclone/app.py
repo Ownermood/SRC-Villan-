@@ -2,13 +2,15 @@
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.custom.message import Message
 
-from tgclone.config import DATA_DIR, Config, Forward, Secrets, load_config, norm_ref, save_config
+from tgclone.config import (CONFIG_FILE, DATA_DIR, Config, Forward, Secrets, load_config, norm_ref,
+                            save_config)
 from tgclone.jobs import Job, JobManager
 from tgclone.message import CloneMessage, media_key, send
 from tgclone.plugins import apply_plugins, load_plugins
@@ -18,12 +20,23 @@ log = logging.getLogger("tgclone")
 
 
 class App:
-    def __init__(self) -> None:
+    """One workspace: a Telegram account with its own forwards, settings, files and jobs.
+
+    App()             -> single-user mode from .env (files in data/, config tgclone.config.json)
+    App(home, uid)    -> one user of the multi-user bot (files in data/users/<uid>/)
+    """
+
+    def __init__(self, home: Optional[Path] = None, uid: int = 0) -> None:
         self.secrets = Secrets()
         self.secrets.check()
-        self.cfg: Config = load_config()
-        self.store = Store(DATA_DIR / "tgclone.db")
-        self.plugins = load_plugins(self.cfg.plugins)
+        self.uid = uid
+        self.home = Path(home) if home else DATA_DIR
+        self.cfg_path = self.home / "config.json" if home else CONFIG_FILE
+        self.cfg: Config = load_config(self.cfg_path, self.home)
+        self.store = Store(self.home / "tgclone.db")
+        self.plugins = load_plugins(self.cfg.plugins, self.home)
+        self.caps: Optional[dict] = None  # limits set by the bot owner (multi-user)
+        self.hub = None  # set by Hub
         self.reader: Optional[TelegramClient] = None  # reads source chats
         self.sender: Optional[TelegramClient] = None  # writes to destinations
         self.control: Optional[TelegramClient] = None  # receives admin commands
@@ -73,6 +86,19 @@ class App:
             self.admins.add((await self.user.get_me()).id)
         await self.load_forwards()
 
+    async def attach(self, user: TelegramClient, bot: Optional[TelegramClient]) -> None:
+        """Multi-user: use an already logged-in user client, bot is the shared control bot."""
+        self.user, self.bot = user, bot
+        self.reader = user
+        self.sender = bot if (self.cfg.send_via_bot and bot) else user
+        self.control = bot or user
+        self.admins = {self.uid}
+        try:
+            await user.get_dialogs()
+        except Exception as e:
+            log.warning("get_dialogs failed for %s: %s", self.uid, e)
+        await self.load_forwards()
+
     @property
     def clients(self) -> List[TelegramClient]:
         return [c for c in (self.user, self.bot) if c]
@@ -98,7 +124,7 @@ class App:
         return self.titles[cid]
 
     def reload_plugins(self) -> None:
-        self.plugins = load_plugins(self.cfg.plugins)
+        self.plugins = load_plugins(self.cfg.plugins, self.home)
 
     async def load_forwards(self) -> None:
         mapping: Dict[int, List[int]] = {}
@@ -117,7 +143,7 @@ class App:
         log.info("Active forwards: %s", mapping)
 
     def save(self) -> None:
-        save_config(self.cfg)
+        save_config(self.cfg, self.cfg_path)
 
     # ------------------------------------------------------------ delivery
     async def process(self, messages: List[Message]) -> List[CloneMessage]:

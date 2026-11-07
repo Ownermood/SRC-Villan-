@@ -24,7 +24,7 @@ echo "==> 3/4 Config files"
 if [ ! -f .env ]; then
     cp .env.example .env
     chmod 600 .env
-    echo "    created .env (fill API_ID, API_HASH, BOT_TOKEN, ADMINS)"
+    echo "    created .env (next: python -m tgclone setup)"
 else
     echo "    .env already exists, not touched"
 fi
@@ -65,7 +65,7 @@ else
 fi
 
 echo
-echo "Done. Next:"
-echo "  1) nano .env                      # API_ID, API_HASH, BOT_TOKEN, ADMINS"
-echo "  2) .venv/bin/python -m tgclone login   # copy SESSION_STRING into .env"
-echo "  3) .venv/bin/python -m tgclone live    # then send /start to your bot"
+echo "Done. Next (only the owner does this, once):"
+echo "  1) .venv/bin/python -m tgclone setup   # answers 4 questions, writes .env"
+echo "  2) .venv/bin/python -m tgclone live    # or: sudo systemctl start tgclone"
+echo "  3) Open your bot in Telegram -> /start -> 🔐 Login (everyone logs in inside the bot)"
