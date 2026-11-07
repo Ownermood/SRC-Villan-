@@ -270,10 +270,13 @@ def test_pause_grows_and_no_unretrieved_errors(tmp_path, monkeypatch):
     async def go():
         asyncio.get_running_loop().set_exception_handler(lambda loop, ctx: errors.append(ctx))
         r = await fast.download(srv, doc_msg(big), str(tmp_path / "a.mp4"))
-        await asyncio.sleep(0.2)  # let cancelled workers finish
+        await asyncio.sleep(0.2)  # let leftover workers finish
+        import gc
+        gc.collect()  # asyncio reports unretrieved task errors when tasks are collected
+        await asyncio.sleep(0)
         return r
     assert run(go()) is None, "falls back to the normal download"
-    assert not errors, "no 'Future exception was never retrieved'"
+    assert not errors, "no asyncio errors logged (Telethon's own futures can't be faked here)"
     first = srv._tgc_pool_off - fast.time.time()
     assert 500 < first <= 600
     srv._tgc_pool_off = 0  # pause over, Telegram refuses again -> longer pause
