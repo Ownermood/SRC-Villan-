@@ -413,6 +413,10 @@ class Panel:
                 self.state.pop(uid, None)
                 await event.answer("Saving…")
                 return await self.add_forward(event, Forward(source=st["src"], dest=st["dests"]))
+            if k == "cl":
+                self.needs_login("Copying old posts")
+                self.state[uid] = {"kind": "clone_src"}
+                return await self.show(event, ui.wizard_prompt("clone_src", app), edit=True)
             if k == "sv":
                 self.state[uid] = {"kind": "save"}
                 return await self.show(event, ui.wizard_prompt("save", app), edit=True)
@@ -565,6 +569,20 @@ class Panel:
                     st["dests"].append(ref)
                     st["titles"].append(await app.title(ref))
                 return await self.show(event, ui.wizard_prompt("new_dest", app, st))
+            if kind == "clone_src":
+                ref = await self.chat_from_message(msg)
+                await app.resolve(ref)
+                await self.check_chat(ref, "source")
+                self.state[uid] = {"kind": "clone_dest", "src": ref, "src_title": await app.title(ref)}
+                return await self.show(event, ui.wizard_prompt("clone_dest", app, self.state[uid]))
+            if kind == "clone_dest":
+                ref = await self.chat_from_message(msg)
+                if await app.resolve(ref) == await app.resolve(st["src"]):
+                    raise ValueError("Destination can't be the source")
+                await self.check_chat(ref, "dest")
+                self.state.pop(uid, None)
+                return await self.start_clone(event, Forward(source=norm_ref(st["src"]),
+                                                             dest=[norm_ref(ref)]), fresh=False)
             if kind == "save":
                 link = parse_link(msg.raw_text)
                 if not link:

@@ -42,7 +42,7 @@ OWNER_CMDS = {"admin", "addpremium", "rmpremium", "block", "unblock"}
 HUB_CALLBACKS = {"lg", "hw", "otp", "ac", "lo", "LO", "LD", "bm", "bx", "gp",
                  "ad", "adm", "adu", "adv", "adb", "adl", "adp", "adj", "adx", "adt", "ap", "dn",
                  "apm", "apg", "apr", "apl", "atr", "apt", "apa", "apx", "abl", "abk", "aub",
-                 "aac", "alm", "asp", "aps", "apd", "aem"}
+                 "aac", "alm", "asp", "aps", "apd", "aem", "aet"}
 # reachable while a plan is expired (profile, logout, help, get premium)
 EXPIRED_OK = {"ac", "lo", "LO", "LD", "gp", "hw", "bx", "otp", "lg", "noop"}
 BOT_COMMANDS = {"start": "Open the control panel", "profile": "Plan, account, logout",
@@ -657,8 +657,8 @@ class Hub:
                                 f"⏰ Valid until <b>{ui.when(expires)}</b>. Enjoy!")
         text = (f"💎 <b>{ui.esc(name)}</b> (<code>{uid}</code>) +{days:g} days\n"
                 f"⏰ Until {ui.when(expires)}")
-        return await self._show(event, (text, [[ui.B("👤 Open user", f"adv:{uid}"),
-                                                ui.B("« Premium", "apm")]]), edit=edit)
+        return await self._show(event, ui.admin_screen((text, [[ui.B("👤 Open user", f"adv:{uid}"),
+                                                ui.B("« Premium", "apm")]])), edit=edit)
 
     async def _block_from(self, event, msg) -> None:
         targets = await self.block_targets(msg)
@@ -667,8 +667,8 @@ class Hub:
         await self._reload_all_forwards()
         names = "\n".join(f"• {ui.esc(t)} <code>{c}</code>" for c, t in targets[:15])
         more = f"\n…and {len(targets) - 15} more" if len(targets) > 15 else ""
-        await self._show(event, (f"🚫 <b>Blocked {len(targets)} chat(s)</b>\n{names}{more}",
-                                 [[ui.B("🚫 Blocked chats", "abl"), ui.B("« Admin", "ad")]]))
+        await self._show(event, ui.admin_screen((f"🚫 <b>Blocked {len(targets)} chat(s)</b>\n{names}{more}",
+                                 [[ui.B("🚫 Blocked chats", "abl"), ui.B("« Admin", "ad")]])))
 
     async def _reload_all_forwards(self) -> None:
         for app, _ in list(self.ws.values()):
@@ -689,8 +689,8 @@ class Hub:
             self.admin_wait = None
             self.remove_plan(uid)
             await self._notify(uid, "➖ Your premium was removed by the owner.")
-            return await self._show(event, (f"➖ Premium removed for <code>{uid}</code>.",
-                                             [[ui.B("« Premium", "apm")]]))
+            return await self._show(event, ui.admin_screen((f"➖ Premium removed for <code>{uid}</code>.",
+                                             [[ui.B("« Premium", "apm")]])))
         if kind == "block":
             await self._block_from(event, msg)
             self.admin_wait = None
@@ -790,6 +790,8 @@ class Hub:
                 st.user_max_batch = steps[max(0, min(len(steps) - 1, i + (1 if up else -1)))]
             save()
             return await show(ui.admin_limits(self))
+        if k == "aet":
+            return await show(await self.emoji_test(event.sender_id))
         if k == "aem":
             st.premium_emoji = not st.premium_emoji
             emoji.set_enabled(st.premium_emoji)
@@ -879,6 +881,33 @@ class Hub:
                 await self._notify(target, "❌ Your access request was declined.")
             await event.answer("Approved" if k == "ap" else "Declined")
             return await show(ui.admin_pending(self))
+
+    async def emoji_test(self, uid: int):
+        """Send a raw premium-emoji message and report exactly what Telegram did."""
+        ids = [emoji.PACK[e] for e in ("⚡", "💎", "✅")]
+        html = "<b>Premium emoji test</b> " + " ".join(
+            f'<tg-emoji emoji-id="{i}">{e}</tg-emoji>' for i, e in zip(ids, ("⚡", "💎", "✅")))
+        send = getattr(self.bot, "_tgc_orig_send", self.bot.send_message)
+        btn = types.KeyboardInlineButton("Icon test", types.InlineButtonTypeCallback(b"noop"),
+                                         style=types.KeyboardButtonStyle(icon=ids[1]))
+        try:
+            msg = await send(uid, html, parse_mode="html", buttons=[[btn]])
+        except Exception as e:
+            verdict = f"❌ Telegram refused the message:\n<code>{ui.esc(str(e))[:300]}</code>"
+        else:
+            kept = sum(isinstance(x, types.MessageEntityCustomEmoji) for x in (msg.entities or []))
+            rows = getattr(getattr(msg, "reply_markup", None), "rows", []) or []
+            icon = any(getattr(getattr(b, "style", None), "icon", None) for r in rows for b in r.buttons)
+            emoji.status = "working" if kept else "removed"
+            verdict = (f"Text: <b>{kept}/3</b> premium emoji kept · Button icon: "
+                       f"<b>{'kept' if icon else 'removed'}</b>\n\n"
+                       + ("✅ Telegram allows this bot to use premium emoji." if kept else
+                          "❌ Telegram removed them. Check in @BotFather → /mybots which account "
+                          "owns this bot: <b>that</b> account needs Telegram Premium (another "
+                          "premium account doesn't count)."))
+        emoji.set_enabled(self.settings.premium_emoji)  # retry right away after the test
+        return ui.admin_screen((f"<b>🔍 Premium emoji test</b>\n\n{verdict}",
+                                [[ui.B("🔄 Refresh", "aet"), ui.B("« Admin", "ad")]]))
 
     # ============================================================ entry: access checks
     async def _allowed(self, event) -> bool:

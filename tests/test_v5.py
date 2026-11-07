@@ -277,3 +277,52 @@ def test_premium_emoji_retried_after_a_refusal(monkeypatch):
     assert emoji.active(), "tried again later (e.g. after the owner bought Premium)"
     monkeypatch.setattr(time, "time", real)
     emoji.set_enabled(True)
+
+
+def test_clone_wizard_from_main_menu(hubenv, monkeypatch):
+    from test_hub import OWNER, login, press, say
+    from tgclone import bot as botmod
+    hub = hubenv.new_hub()
+    login(hub, OWNER, "+91000000001", env=hubenv)
+    started = []
+
+    async def fake_clone(self, event, fwd, fresh):
+        started.append((fwd.source, fwd.dest, fresh))
+    monkeypatch.setattr(botmod.Panel, "start_clone", fake_clone)
+    ev = press(hub, "cl", OWNER)
+    assert "step 1/2" in ev.edits[-1][0]
+    say(hub, "-100111", OWNER)
+    ev = say(hub, "-100111", OWNER)
+    assert "can't be the source" in ev.out[-1][0]
+    say(hub, "-100222", OWNER)
+    assert started == [(-100111, [-100222], False)]
+    assert hub.ws[OWNER][0].cfg.forwards == [], "a one-off clone doesn't add a live forward"
+
+
+def test_admin_emoji_test_reports_truth(hubenv):
+    from test_hub import OWNER, login, press
+    hub = hubenv.new_hub()
+    login(hub, OWNER, "+91000000001", env=hubenv)
+    bot = hub.bot
+
+    async def kept(uid, text, **kw):
+        return _t.SimpleNamespace(entities=[types.MessageEntityCustomEmoji(0, 1, document_id=1)] * 3,
+                                  reply_markup=types.ReplyInlineMarkup(rows=[types.KeyboardButtonRow(
+                                      kw["buttons"][0])]))
+    bot._tgc_orig_send = kept
+    ev = press(hub, "aet", OWNER)
+    assert ev.edits, ev.answers
+    assert "3/3" in ev.edits[-1][0] and "kept" in ev.edits[-1][0] and "allows" in ev.edits[-1][0]
+
+    async def removed(uid, text, **kw):
+        return _t.SimpleNamespace(entities=[], reply_markup=None)
+    bot._tgc_orig_send = removed
+    ev = press(hub, "aet", OWNER)
+    assert "0/3" in ev.edits[-1][0] and "BotFather" in ev.edits[-1][0]
+
+    async def refused(uid, text, **kw):
+        raise Exception("ENTITY_TEXT_INVALID")
+    bot._tgc_orig_send = refused
+    ev = press(hub, "aet", OWNER)
+    assert "ENTITY_TEXT_INVALID" in ev.edits[-1][0]
+    assert press(hub, "aet", 5).answers[-1] == ("🚫 Owner only", True)

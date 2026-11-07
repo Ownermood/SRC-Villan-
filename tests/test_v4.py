@@ -283,8 +283,9 @@ def test_admin_panel_sections_owner_only(hubenv):
     login(hub, 5, "+91000000005", env=hubenv)
     ev = press(hub, "ad", OWNER)
     assert {"adu:0", "adp", "apm", "abl", "aac", "alm", "asp", "aem"} <= datas(ev.edits[-1][1])
-    styles = {b.type.data.decode(): b.style for row in ev.edits[-1][1] for b in row}
-    assert styles["apm"].bg_danger, "admin sections are red"
+    btns = {b.type.data.decode(): b for row in ev.edits[-1][1] for b in row}
+    assert btns["apm"].style.bg_primary and btns["aet"].style.bg_primary, "admin sections blue"
+    assert btns["m"].style.bg_danger and btns["ad"].style.bg_success, "back red, refresh green"
     for key in ("ad", "apm", "abl", "aac", "alm", "asp", "adu:0", "adp"):
         ev = press(hub, key, 5)
         assert ev.answers[-1] == ("🚫 Owner only", True), key

@@ -93,7 +93,8 @@ async def main_menu(app: App) -> Screen:
            else "<i>💡 Send any t.me post link to save it.</i>")
     text = "<b>⚡ tgclone</b> · <i>control panel</i>\n\n<blockquote>" + "\n".join(lines) + "</blockquote>\n" + tip
     buttons = [
-        [B("📡 Forwards", "fl:0", "primary"), B("➕ New forward", "na", "success")],
+        [B("🔁 Clone a chat", "cl", "success")],
+        [B("📡 Forwards", "fl:0", "primary"), B("➕ New forward", "na", "primary")],
         [B("📥 Save posts", "sv"), B(f"⏳ Jobs ({len(run)})" if run else "⏳ Jobs", "jl")],
         [B("🧩 Plugins", "pl"), B("⚙️ Settings", "st")],
         [B("👤 My profile", "ac") if hub is not None else B("📊 Status", "noop"), B("❔ Help", "hp")],
@@ -378,6 +379,15 @@ def wizard_prompt(kind: str, app: App, data: dict = None) -> Screen:
         return (f"<b>➕ New forward · step 2/2</b>\n\nFrom: <b>{esc(data['src_title'])}</b>\n\n"
                 f"Send <b>destination</b> chat(s), one by one. Added:\n{got}",
                 [[B("✅ Done", "nd", "success"), B("✖️ Cancel", "x")]])
+    if kind == "clone_src":
+        return ("<b>🔁 Clone a chat · step 1/2</b>\n\nSend the chat to <b>copy from</b>:\n<blockquote>"
+                "• forward any message from it\n• or @username / -100id / t.me link</blockquote>\n"
+                "<i>Every old post is copied (topics too), in order. It continues by itself after a "
+                "restart.</i>", cancel)
+    if kind == "clone_dest":
+        return (f"<b>🔁 Clone a chat · step 2/2</b>\n\nFrom: <b>{esc(data['src_title'])}</b>\n\n"
+                "Now send the chat to <b>copy into</b> (forward a message from it, or its "
+                "@username / -100id). Your account must be an admin there.", cancel)
     if kind == "save":
         return ("<b>📥 Save posts</b>\n\nSend a post link:\n<blockquote>"
                 "<code>https://t.me/channel/123</code>\n<code>https://t.me/c/1234567/123</code>\n"
@@ -594,10 +604,51 @@ def account_view(info: dict, uid: int) -> Screen:  # kept for old callers
 
 
 # ------------------------------------------------------------------ admin (owner only)
-def _a(text, data):  # admin section button: red theme
-    return B(text, data, "danger")
+def _a(text, data):  # admin section button: blue
+    return B(text, data, "primary")
 
 
+def _paint(rows):
+    """Admin colours: « Back = red, Refresh = green, everything else blue
+    (buttons that already have a colour - Ban / Remove red, Approve / Give green - keep it)."""
+    from telethon.tl import types as _types
+    out = []
+    for row in rows or []:
+        new = []
+        for b in row:
+            if isinstance(b, _types.KeyboardInlineButton):
+                st = b.style
+                has = st is not None and (st.bg_primary or st.bg_danger or st.bg_success)
+                if b.text.startswith("«") or "Cancel" in b.text:
+                    color = "danger"
+                elif "Refresh" in b.text:
+                    color = "success"
+                elif has:
+                    new.append(b)
+                    continue
+                else:
+                    color = "primary"
+                b = _types.KeyboardInlineButton(b.text, b.type, style=_types.KeyboardButtonStyle(
+                    **{f"bg_{color}": True}))
+            new.append(b)
+        out.append(new)
+    return out
+
+
+def admin_screen(fn):
+    """Decorator / wrapper: applies the admin colours to a screen."""
+    import functools
+    if callable(fn):
+        @functools.wraps(fn)
+        def wrap(*a, **k):
+            text, rows = fn(*a, **k)
+            return text, _paint(rows)
+        return wrap
+    text, rows = fn
+    return text, _paint(rows)
+
+
+@admin_screen
 def admin_view(hub) -> Screen:
     st, c = hub.settings, hub.acc.counts()
     running = sum(len(app.jobs.running()) for app, _ in hub.ws.values())
@@ -617,6 +668,7 @@ def admin_view(hub) -> Screen:
         [_a("💎 Premium", "apm"), _a("🚫 Blocked chats", "abl")],
         [_a("🔐 Access", "aac"), _a("⚙️ Limits", "alm")],
         [_a("🖼 Start photo", "asp"), _a(f"⭐ Premium emoji: {'on' if st.premium_emoji else 'off'}", "aem")],
+        [_a("🔍 Test premium emoji", "aet")],
         [B("🔄 Refresh", "ad"), B("« Back", "m")],
     ]
     return text, rows
@@ -635,12 +687,13 @@ def _emoji_note(st) -> str:
     }.get(emoji.status, "⭐ <b>Premium emoji</b> · checking on the next screen…")
 
 
+@admin_screen
 def admin_access(hub) -> Screen:
     st = hub.settings
 
     def mode(key, label):
         on = st.mode == key
-        return B(("● " if on else "") + label, f"adm:{key}", "danger" if on else None)
+        return B(("● " if on else "") + label, f"adm:{key}", "success" if on else None)
     return ("<b>🔐 Access</b>\n\n<blockquote>🌐 <b>Open</b> — anyone can use the bot\n"
             "✅ <b>Approval</b> — new users need your OK (you get a request with buttons)\n"
             "🔒 <b>Only me</b> — private bot</blockquote>",
@@ -648,6 +701,7 @@ def admin_access(hub) -> Screen:
              [B("« Admin", "ad")]])
 
 
+@admin_screen
 def admin_limits(hub) -> Screen:
     st = hub.settings
     return ("<b>⚙️ Limits</b> · <i>for users, not for you</i>\n\n<blockquote>"
@@ -660,6 +714,7 @@ def admin_limits(hub) -> Screen:
              [B("« Admin", "ad")]])
 
 
+@admin_screen
 def admin_premium(hub) -> Screen:
     st, now = hub.settings, _time.time()
     plans = hub.acc.plans()
@@ -679,6 +734,7 @@ def admin_premium(hub) -> Screen:
              [B("« Admin", "ad")]])
 
 
+@admin_screen
 def admin_premium_list(hub, page: int = 0) -> Screen:
     now = _time.time()
     plans = [p for p in hub.acc.plans() if p["expires"] > now]
@@ -697,6 +753,7 @@ def admin_premium_list(hub, page: int = 0) -> Screen:
     return f"<b>📋 Active plans</b> · {len(plans)}\n<i>⭐ premium · 🎁 trial</i>", rows
 
 
+@admin_screen
 def admin_prompt(kind: str) -> Screen:
     back = {"premium": "apm", "rmpremium": "apm", "block": "abl", "photo": "asp"}[kind]
     texts = {
@@ -715,6 +772,7 @@ def admin_prompt(kind: str) -> Screen:
     return texts[kind], [[B("❌ Cancel", back)]]
 
 
+@admin_screen
 def admin_blocked(hub) -> Screen:
     items = hub.acc.blocked()
     rows = [[B(f"❌ {str(b['title'] or b['chat_id'])[:26]}", f"aub:{b['chat_id']}")] for b in items[:20]]
@@ -725,6 +783,7 @@ def admin_blocked(hub) -> Screen:
             f"<i>Tap one to unblock.</i>{more}", rows)
 
 
+@admin_screen
 def admin_photo(hub) -> Screen:
     cur = hub.settings.start_photo
     return ("<b>🖼 Start photo</b>\n\n<blockquote>"
@@ -733,6 +792,7 @@ def admin_photo(hub) -> Screen:
              [B("« Admin", "ad")]])
 
 
+@admin_screen
 def admin_users(hub, page: int = 0) -> Screen:
     users = hub.acc.users()
     known = {u["uid"] for u in users}
@@ -759,6 +819,7 @@ def admin_users(hub, page: int = 0) -> Screen:
     return f"<b>👥 Users</b> · {len(users)}\n<i>🟢 online · ⚫ offline · 🤖 without login · 🚫 banned</i>", rows
 
 
+@admin_screen
 def admin_user(hub, uid: int) -> Screen:
     info = hub.acc.info(uid) or {}
     banned = hub.acc.access(uid) == "banned"
@@ -783,6 +844,7 @@ def admin_user(hub, uid: int) -> Screen:
     return text, rows
 
 
+@admin_screen
 def admin_pending(hub) -> Screen:
     pend = hub.acc.by_state("pending")
     if not pend:

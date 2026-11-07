@@ -49,7 +49,8 @@ def test_main_menu_colored_buttons():
     text, buttons = run(ui.main_menu(a))
     s = styles(buttons)
     assert "tgclone" in text and "<blockquote>" in text
-    assert s["📡 Forwards"] == "primary" and s["➕ New forward"] == "success"
+    assert s["🔁 Clone a chat"] == "success" and buttons[0][0].text == "🔁 Clone a chat", "big clone on top"
+    assert len(buttons[0]) == 1 and s["📡 Forwards"] == "primary" and s["➕ New forward"] == "primary"
     assert all(len(b.type.data) <= 64 for row in buttons for b in row)
 
 

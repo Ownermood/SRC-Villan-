@@ -183,6 +183,7 @@ def install(client) -> None:
         return
     client._tgc_emoji = True
     orig_send, orig_edit, orig_file = client.send_message, client.edit_message, client.send_file
+    client._tgc_orig_send = orig_send  # raw sender for the admin "test premium emoji" button
 
     async def _go(fn, args, kw, where):
         args = list(args)
