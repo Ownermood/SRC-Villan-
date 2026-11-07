@@ -310,7 +310,7 @@ def test_hub_screens_serialize():
     from tgclone import ui
     tc = TelegramClient(MemorySession(), 1, "x")
     for text, buttons in [ui.welcome(), ui.code_prompt("x"), ui.login_password(),
-                          ui.account_view({"name": "A", "phone": "919876543210", "created": 0}, 5)]:
+                          ui.welcome(owner_only=True)]:
         tl_html.parse(text)
         if buttons:
             assert bytes(tc.build_reply_markup(buttons))

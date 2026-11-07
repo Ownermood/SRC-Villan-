@@ -116,10 +116,6 @@ def decorate_text(html: str) -> str:
     return "".join(parts)
 
 
-def strip_text(html: str) -> str:
-    return _TAG_RE.sub(r"\1", html)
-
-
 def _decorate_button(b):
     if not isinstance(b, types.KeyboardInlineButton):
         return b

@@ -203,11 +203,11 @@ def test_screens_serialize_for_telegram():
     client = TelegramClient(MemorySession(), 1, "x")
     screens = [run(ui.main_menu(a)), run(ui.forwards_list(a)), run(ui.forward_view(a, 0)),
                ui.jobs_view(a), ui.plugins_view(a), ui.filetypes_view(a), ui.settings_view(a),
-               (ui.HELP, None), ui.wizard_prompt("new_src", a), ui.wizard_prompt("repl", a)]
+               (ui.help_text(), None), ui.wizard_prompt("new_src", a), ui.wizard_prompt("repl", a)]
     for text, buttons in screens:
         plain, ents = tl_html.parse(text)
         assert plain and "<b>" not in plain
         if buttons:
             assert len(bytes(client.build_reply_markup(buttons))) > 0
-    _, ents = tl_html.parse(ui.HELP)
+    _, ents = tl_html.parse(ui.help_text())
     assert any(getattr(e, "collapsed", False) for e in ents), "expandable blockquote"

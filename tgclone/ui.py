@@ -364,8 +364,6 @@ New users get {trial_hours}h free. More time: 👤 My profile → 💎 Get premi
 /setchat chat|off · /status · /help</blockquote>"""
 
 
-HELP = help_text()
-
 
 def wizard_prompt(kind: str, app: App, data: dict = None) -> Screen:
     cancel = [[B("✖️ Cancel", "x")]]
@@ -651,13 +649,6 @@ def plan_expired(hub, uid: int) -> Screen:
     return (f"<b>⌛ Your plan has ended{ended}</b>\n\n<blockquote>Live forwarding is paused.\n"
             "Your forwards and settings are safe.</blockquote>\n💎 Get premium to continue.",
             [[B("💎 Get premium", "gp", "success")], [B("👤 My profile", "ac"), B("❔ Help", "hw")]])
-
-
-def account_view(info: dict, uid: int) -> Screen:  # kept for old callers
-    return ("<b>👤 Account</b>\n\n<blockquote>"
-            f"<b>Telegram</b> · {esc(info.get('name') or '—')}\n"
-            f"<b>Phone</b> · {mask_phone(info.get('phone'))}\n<b>Your id</b> · <code>{uid}</code></blockquote>",
-            [[B("🚪 Logout", "lo", "danger")], [B("« Back", "m")]])
 
 
 # ------------------------------------------------------------------ admin (owner only)
