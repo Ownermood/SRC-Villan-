@@ -58,13 +58,16 @@ class CaptionCfg(BaseModel):
 
 class MarkCfg(BaseModel):
     check: bool = False
-    image: str = "image.png"  # local path or https:// url
-    position: str = "centre"
-    frame_rate: int = 15
+    image: str = ""  # local path or https:// url ("" = logo uploaded from the bot)
+    position: str = "bottom_right"  # top_left | top_right | centre | bottom_left | bottom_right
+    size: float = Field(0.2, ge=0.05, le=1.0)  # logo width as a fraction of the media width
+    frame_rate: int = 0  # 0 = keep the source frame rate
 
 
 class OcrCfg(BaseModel):
     check: bool = False
+    lang: str = "eng"  # tesseract languages, e.g. "eng+hin"
+    keep_caption: bool = True  # put OCR text under the original caption instead of replacing it
 
 
 class PluginConfig(BaseModel):

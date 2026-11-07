@@ -205,7 +205,7 @@ async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
 
     if tm.new_file or (download and tm.file_type in FILE_TYPES):
         path = tm.new_file or await tm.download(cfg.max_file_mb, cfg.max_disk_mb, progress)
-        kw = {} if tm.new_file else _file_kwargs(tm)
+        kw = _file_kwargs(tm)  # keeps duration/size/streaming, also for watermarked files
         thumb = None
         if not tm.new_file:
             thumb = await thumbs.pick(cfg, tm)

@@ -102,6 +102,31 @@ class Panel:
                 return await self.c.download_media(m, file=bytes)
         raise ValueError("Send a photo (or an image file).")
 
+    async def set_logo(self, event, msg):
+        from tgclone.plugins.mark import LOGO
+        import io
+        from PIL import Image
+        try:
+            img = Image.open(io.BytesIO(await self.image_from(msg)))
+            img.load()
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError("That file is not an image") from e
+        img = img.convert("RGBA")
+        img.thumbnail((1024, 1024))
+        LOGO.parent.mkdir(parents=True, exist_ok=True)
+        img.save(LOGO, "PNG")
+        mark = self.app.cfg.plugins.mark
+        mark.image, mark.check = "", True
+        self.save(plugins=True)
+        self.state.pop(event.sender_id, None)
+        loaded = any(p.id_ == "mark" for p in self.app.plugins)
+        await event.respond("✅ Watermark logo saved, watermark is on." if loaded else
+                            "✅ Logo saved, but the watermark plugin couldn't load "
+                            "(is ffmpeg installed?). Check data/tgclone.log.")
+        return await self.show(event, ui.plugins_view(self.app))
+
     async def set_thumb(self, event, msg):
         size = thumbs.save_custom(await self.image_from(msg))
         self.app.cfg.thumb.mode = "custom"
@@ -378,6 +403,21 @@ class Panel:
                 fmt.check = fmt.style != "preserve"
                 self.save(plugins=True)
                 return await self.show(event, ui.plugins_view(app), edit=True)
+            if k == "wl":
+                self.state[uid] = {"kind": "logo"}
+                return await self.show(event, ui.wizard_prompt("logo", app), edit=True)
+            if k == "wp":
+                app.cfg.plugins.mark.position = ui.cycle(ui.MARK_POSITIONS, app.cfg.plugins.mark.position)
+                self.save(plugins=True)
+                return await self.show(event, ui.plugins_view(app), edit=True)
+            if k == "wz":
+                app.cfg.plugins.mark.size = ui.cycle(ui.MARK_SIZES, app.cfg.plugins.mark.size)
+                self.save(plugins=True)
+                return await self.show(event, ui.plugins_view(app), edit=True)
+            if k == "ol":
+                app.cfg.plugins.ocr.lang = ui.cycle(ui.OCR_LANGS, app.cfg.plugins.ocr.lang)
+                self.save(plugins=True)
+                return await self.show(event, ui.plugins_view(app), edit=True)
             if k == "pf":
                 return await self.show(event, ui.filetypes_view(app), edit=True)
             if k == "pff":
@@ -488,6 +528,8 @@ class Panel:
                 return await self.start_save(event, *link)
             if kind == "thumb":
                 return await self.set_thumb(event, msg)
+            if kind == "logo":
+                return await self.set_logo(event, msg)
             if kind == "target":
                 ref = await self.chat_from_message(msg)
                 await app.control.get_input_entity(ref)

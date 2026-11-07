@@ -86,8 +86,8 @@ Text commands still work (and are the only option for a user account without a b
     "replace": {"check": false, "text": {"old": "new"}, "regex": false},
     "fmt":     {"check": false, "style": "preserve"},
     "caption": {"check": false, "header": "", "footer": ""},
-    "ocr":     {"check": false},
-    "mark":    {"check": false, "image": "image.png", "position": "centre", "frame_rate": 15}
+    "ocr":     {"check": false, "lang": "eng", "keep_caption": true},
+    "mark":    {"check": false, "image": "", "position": "bottom_right", "size": 0.2, "frame_rate": 0}
   }
 }
 ```
@@ -98,6 +98,19 @@ File types: `text photo video gif audio voice video_note sticker document poll c
 - Re-uploaded files keep their original thumbnail, file name, duration and voice/round flags.
 - `max_disk_mb` is a soft cap on temporary downloads. When it is full, new downloads wait for running jobs to free space.
 - Edit sync ignores reaction and view-count updates. If the media itself was replaced, the new media is synced too.
+
+## OCR & watermark plugins
+
+Both need a system program. The Docker image already includes them.
+
+```bash
+sudo apt install ffmpeg tesseract-ocr tesseract-ocr-hin   # Ubuntu/Debian VPS
+pkg install ffmpeg tesseract                              # Termux
+```
+
+- **OCR**: reads text from photos and adds it under the caption (`keep_caption`). The language is set from the panel (`eng`, `eng+hin`, `hin`). It runs in a thread, so the bot never freezes.
+- **Watermark**: in the panel, tap 🧩 Plugins → 💧 Watermark logo and send a PNG *as a file* to keep transparency. 📍 sets the position and 📏 sets the size (% of the width). Videos keep their audio and duration. ffmpeg runs async, with a 30-minute limit per file.
+- If a program is missing, the plugin shows "⚠️ Not loaded" and everything else keeps working.
 
 ## Tests
 

@@ -189,11 +189,12 @@ def plugins_view(app: App) -> Screen:
         "<b>🧩 Plugins</b> · <i>applied in this order</i>\n\n<blockquote>"
         f"{on_off(p.filter.check)} <b>Filter</b> · {blocked} type(s) blocked, "
         f"{len(p.filter.text.blacklist)} blocked / {len(p.filter.text.whitelist)} required word(s)\n"
-        f"{on_off(p.ocr.check)} <b>OCR</b> · photo → text\n"
+        f"{on_off(p.ocr.check)} <b>OCR</b> · photo → text ({esc(p.ocr.lang)})\n"
         f"{on_off(p.replace.check)} <b>Replace</b> · {len(p.replace.text)} rule(s)\n"
         f"{on_off(p.fmt.check)} <b>Format</b> · {esc(p.fmt.style)}\n"
         f"{on_off(p.caption.check)} <b>Caption</b> · header {len(p.caption.header)} / footer {len(p.caption.footer)} chars\n"
-        f"{on_off(p.mark.check)} <b>Watermark</b> · {esc(p.mark.position)}</blockquote>"
+        f"{on_off(p.mark.check)} <b>Watermark</b> · {esc(p.mark.position)}, {int(p.mark.size * 100)}% wide, "
+        f"logo {'✅' if mark_logo_ok(app) else '— not set'}</blockquote>"
     )
     if warn:
         text += f"\n⚠️ Not loaded (missing dependency): {', '.join(warn)}"
@@ -209,9 +210,27 @@ def plugins_view(app: App) -> Screen:
         [B(f"🎨 Style: {p.fmt.style}", "ps"), B("🗂 File types", "pf")],
         [B("🚫 Block words", "pw:black"), B("✔️ Required words", "pw:white")],
         [B("🔁 Replace rules", "pw:repl"), B("🧾 Header", "pw:head"), B("🧾 Footer", "pw:foot")],
+        [B("💧 Watermark logo", "wl"), B(f"📍 {p.mark.position}", "wp"),
+         B(f"📏 {int(p.mark.size * 100)}%", "wz")],
+        [B(f"🔤 OCR language: {p.ocr.lang}", "ol")],
         [B("« Back", "m")],
     ]
     return text, buttons
+
+
+MARK_POSITIONS = ["bottom_right", "bottom_left", "top_right", "top_left", "centre"]
+MARK_SIZES = [0.1, 0.15, 0.2, 0.3, 0.4, 0.5]
+OCR_LANGS = ["eng", "eng+hin", "hin"]
+
+
+def mark_logo_ok(app: App) -> bool:
+    from tgclone.plugins.mark import LOGO
+    img = app.cfg.plugins.mark.image
+    return bool(img) or LOGO.exists()
+
+
+def cycle(options: list, current):
+    return options[(options.index(current) + 1) % len(options)] if current in options else options[0]
 
 
 def filetypes_view(app: App) -> Screen:
@@ -336,6 +355,10 @@ def wizard_prompt(kind: str, app: App, data: dict = None) -> Screen:
         return ("<b>📤 Upload thumbnail</b>\n\nSend a <b>photo</b> (or an image file). "
                 "It's resized to 320px JPEG automatically and used for videos, PDFs/files, "
                 "audio covers and GIFs.", [[B("✖️ Cancel", "th")]])
+    if kind == "logo":
+        return ("<b>💧 Watermark logo</b>\n\nSend your logo as a <b>file</b> (PNG with a transparent "
+                "background looks best — sending it as a photo removes transparency).\n"
+                "It's placed on photos, videos and GIFs.", [[B("✖️ Cancel", "pl")]])
     if kind == "target":
         return ("<b>🎯 Save target</b>\n\nForward a message from the chat where saved posts "
                 "should go, or send @username / -100id.", cancel)
