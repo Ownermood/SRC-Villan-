@@ -28,46 +28,31 @@ PAUSE_AFTER_RESET = 600  # Telegram cut our extra connections: one connection fo
 MIN_SIZE = 2 * 1024 * 1024  # smaller files: normal transfer is fine
 
 
-async def open_pool(client, dc_id: int, n: int):
-    """n extra connections to a data centre (FastTelethon technique).
+class _QuietLoggers(dict):
+    """Telethon's sender logs every dropped extra connection as ERROR; keep them silent."""
 
-    Home DC: new connections with the account's own key. Other DC: the login is exported
-    ONCE and imported on the first connection; the rest reuse that authorised key.
-    Returns (callers, close). Raises if this Telethon can't do it -> caller falls back.
+    def __missing__(self, key):
+        lg = logging.getLogger("tgclone.pool." + key)
+        lg.setLevel(logging.CRITICAL + 1)
+        self[key] = lg
+        return lg
+
+
+async def open_pool(client, dc_id: int, n: int):
+    """n extra connections to a data centre (FastTelethon technique, made stricter).
+
+    Every connection starts with its own initConnection. Other DC: every connection imports
+    its OWN exported login (sharing one imported key made Telegram drop the connections).
+    Returns (callers, close). Raises if not possible -> the caller uses one connection.
     """
     import copy
     from telethon import network
     from telethon.tl.alltlobjects import LAYER
     dc = await client._get_dc(dc_id)
     home = dc_id == client.session.dc_id
-    keys = client.__dict__.setdefault("_tgc_dc_keys", {})  # dc -> authorised key (exported once)
     lock = client.__dict__.setdefault("_tgc_pool_lock", asyncio.Lock())
+    quiet = _QuietLoggers()
     senders = []
-
-    def new_sender(key):
-        # no reconnect loop: if Telegram cuts an extra connection, the transfer falls back instead
-        return network.MTProtoSender(key, loggers=client._log, auto_reconnect=False, retries=2)
-
-    async def connect(snd):
-        await snd.connect(client._connection(dc.ip_address, dc.port, dc.id, loggers=client._log,
-                                             proxy=client._proxy, local_addr=client._local_addr))
-
-    async def authorised_key():
-        """Other DC: export the login once (several downloads may ask at the same time)."""
-        async with lock:
-            if dc_id in keys:
-                return keys[dc_id]
-            snd = new_sender(None)
-            await connect(snd)
-            auth = await client(functions.auth.ExportAuthorizationRequest(dc_id))
-            init = copy.copy(client._init_request)  # never touch Telethon's shared request
-            init.query = functions.auth.ImportAuthorizationRequest(id=auth.id, bytes=auth.bytes)
-            await snd.send(functions.InvokeWithLayerRequest(LAYER, init))
-            keys[dc_id] = snd.auth_key
-            senders.append(snd)  # already connected and authorised: use it too
-            return keys[dc_id]
-
-    key = client.session.auth_key if home else None
 
     async def close():
         for snd in senders:
@@ -75,17 +60,28 @@ async def open_pool(client, dc_id: int, n: int):
                 await snd.disconnect()
             except Exception:
                 pass
+
+    async def new_connection():
+        # no reconnect loop: if Telegram cuts an extra connection, the transfer falls back instead
+        snd = network.MTProtoSender(client.session.auth_key if home else None, loggers=quiet,
+                                    auto_reconnect=False, retries=2)
+        await snd.connect(client._connection(dc.ip_address, dc.port, dc.id, loggers=quiet,
+                                             proxy=client._proxy, local_addr=client._local_addr))
+        senders.append(snd)
+        init = copy.copy(client._init_request)  # never touch Telethon's shared request
+        if home:
+            init.query = functions.help.GetNearestDcRequest()
+        else:
+            async with lock:  # one export at a time (parallel downloads used to mix them up)
+                auth = await client(functions.auth.ExportAuthorizationRequest(dc_id))
+            init.query = functions.auth.ImportAuthorizationRequest(id=auth.id, bytes=auth.bytes)
+        await snd.send(functions.InvokeWithLayerRequest(LAYER, init))
+
     try:
-        if key is None:
-            key = await authorised_key()
-        while len(senders) < n:
-            snd = new_sender(key)
-            await connect(snd)
-            senders.append(snd)
+        for _ in range(n):
+            await new_connection()
     except Exception:
         await close()
-        if not home:
-            keys.pop(dc_id, None)  # export again next time
         raise
 
     def caller(snd):
@@ -141,14 +137,17 @@ async def acquire(client, dc_id: int):
     async def release(broken: bool = False) -> None:
         p.refs -= 1
         if broken:
-            client._tgc_pool_off = time.time() + PAUSE_AFTER_RESET
-            log.warning("Extra connections failed - one connection for the next %s min",
-                        PAUSE_AFTER_RESET // 60)
+            fails = client.__dict__.get("_tgc_pool_fails", 0) + 1
+            client._tgc_pool_fails = fails
+            pause = min(PAUSE_AFTER_RESET * 6 ** (fails - 1), 24 * 3600)  # 10 min, 1 h, 6 h, 24 h
+            client._tgc_pool_off = time.time() + pause
+            log.warning("Extra connections refused by Telegram (network / IP limit) - "
+                        "one connection for the next %s", f"{pause // 3600} h" if pause >= 3600
+                        else f"{pause // 60} min")
             async with p.lock:
                 if p.close is not None:
                     await p.close()
                 p.callers = p.close = None
-            client.__dict__.get("_tgc_dc_keys", {}).pop(dc_id, None)
         elif p.refs == 0:
             p.idle = asyncio.ensure_future(close_later())
     return callers, release
@@ -162,6 +161,18 @@ async def _report(progress, done: int, total: int) -> None:
                 await r
         except Exception:
             pass
+
+
+async def _run_all(worker, slots) -> None:
+    """Run the workers; if one fails, stop the others cleanly before re-raising."""
+    tasks = [asyncio.ensure_future(worker(c)) for c in slots]
+    try:
+        await asyncio.gather(*tasks)
+    except BaseException:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 async def download(client, message, path: str,
@@ -217,7 +228,7 @@ async def download(client, message, path: str,
                 await _report(progress, min(done, size), size)
 
         slots = [c for c in callers for _ in range(per)][:parts]  # callers, not coroutines
-        await asyncio.gather(*(worker(c) for c in slots))
+        await _run_all(worker, slots)
         await _report(progress, size, size)
         return path
     except Exception as e:
@@ -281,7 +292,7 @@ async def upload(client, path: str, progress: Optional[Callable[[int, int], None
                 await _report(progress, min(done, size), size)
 
         slots = [c for c in callers for _ in range(per)][:parts]
-        await asyncio.gather(*(worker(c) for c in slots))
+        await _run_all(worker, slots)
         return types.InputFileBig(file_id, parts, os.path.basename(path))
     except Exception as e:
         log.info("Fast upload not possible (%s) - using normal upload", e)

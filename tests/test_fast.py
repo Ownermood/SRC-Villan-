@@ -139,7 +139,7 @@ class FakeNet:
     """Fake Telethon internals for open_pool: one Telegram DC that checks login imports."""
 
     def __init__(self):
-        self.exports, self.imports, self.connected = 0, [], 0
+        self.exports, self.imports, self.connected, self.home_inits = 0, [], 0, 0
         self.valid = None  # the auth bytes Telegram expects right now
 
     def client(self):
@@ -177,7 +177,10 @@ class FakeNet:
                 net.connected += 1
 
             async def send(self, req):
-                q = req.query.query  # InvokeWithLayer(InitConnection(ImportAuthorization))
+                q = req.query.query  # InvokeWithLayer(InitConnection(...))
+                if type(q).__name__ != "ImportAuthorizationRequest":
+                    net.home_inits += 1  # home DC: initConnection with a cheap call
+                    return None
                 if q.bytes != net.valid:
                     raise ValueError("The provided authorization is invalid")
                 net.imports.append(q.id)
@@ -188,24 +191,25 @@ class FakeNet:
         return Sender
 
 
-def test_pool_exports_login_once_even_with_parallel_downloads(monkeypatch):
-    """Real log: 3 prefetch downloads exported at once and broke each other's import."""
+def test_pool_each_connection_has_its_own_login(monkeypatch):
+    """Real logs: a shared imported key made Telegram drop the extra connections, and parallel
+    exports mixed each other up. Now: one shared pool, each connection imports its own login."""
     from telethon import network
     net = FakeNet()
     monkeypatch.setattr(network, "MTProtoSender", net.sender_class())
     client = net.client()
 
     async def go():
-        return await asyncio.gather(*(fast.open_pool(client, 4, 4) for _ in range(3)))
+        got = await asyncio.gather(*(fast.acquire(client, 4) for _ in range(3)))
+        for _, release in got:
+            await release()
+        return got
     pools = run(go())
-    assert net.exports == 1 and net.imports == [1], "one export, one import, shared"
+    assert net.exports == 4 and net.imports == [1, 2, 3, 4], "4 connections, 4 valid imports"
+    assert all(callers is pools[0][0] for callers, _ in pools), "3 downloads share one pool"
     assert client._init_request.query is None, "Telethon's shared request is never modified"
-    assert all(len(callers) == 4 for callers, _ in pools)
-    run(fast.open_pool(client, 4, 4))
-    assert net.exports == 1, "the authorised key is remembered"
     callers, _ = run(fast.open_pool(client, 5, 2))
-    assert len(callers) == 2 and net.exports == 1, "home DC needs no export"
-
+    assert len(callers) == 2 and net.exports == 4 and net.home_inits == 2, "home DC: init, no export"
 
 
 def test_parallel_downloads_share_one_pool_and_resets_pause_it(tmp_path, monkeypatch):
@@ -244,3 +248,34 @@ def test_parallel_downloads_share_one_pool_and_resets_pause_it(tmp_path, monkeyp
     assert srv2._tgc_pool_off > fast.time.time() + 500
     out = run(fast.download(srv2, doc_msg(big), str(tmp_path / "y.mp4")))
     assert open(out, "rb").read() == data and opened.count("dead") == 1, "paused: one connection"
+
+
+def test_pause_grows_and_no_unretrieved_errors(tmp_path, monkeypatch):
+    big = 11 * 1024 * 1024
+    data = os.urandom(big)
+    srv = FileServer(data)
+    errors = []
+
+    async def half_dead(client, dc_id, n):
+        async def bad(req):
+            await asyncio.sleep(0.005)
+            raise ConnectionError("Connection reset by peer")
+
+        async def slow(req):
+            await asyncio.sleep(0.05)
+            return await srv._call("pool", req)
+        return [bad, slow, slow, slow], (lambda: asyncio.sleep(0))
+    monkeypatch.setattr(fast, "open_pool", half_dead)
+
+    async def go():
+        asyncio.get_running_loop().set_exception_handler(lambda loop, ctx: errors.append(ctx))
+        r = await fast.download(srv, doc_msg(big), str(tmp_path / "a.mp4"))
+        await asyncio.sleep(0.2)  # let cancelled workers finish
+        return r
+    assert run(go()) is None, "falls back to the normal download"
+    assert not errors, "no 'Future exception was never retrieved'"
+    first = srv._tgc_pool_off - fast.time.time()
+    assert 500 < first <= 600
+    srv._tgc_pool_off = 0  # pause over, Telegram refuses again -> longer pause
+    run(go())
+    assert srv._tgc_pool_off - fast.time.time() > 3000, "10 min, then 1 h, then 6 h ..."
