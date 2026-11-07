@@ -13,6 +13,9 @@ from telethon import TelegramClient
 from telethon.errors import (ChatForwardsRestrictedError, DocumentInvalidError, FloodWaitError,
                              ServerError)
 from telethon.tl import functions
+from telethon.extensions import html as tl_html
+
+from tgclone import richtext
 from telethon.tl import types
 from telethon.tl.custom.message import Message
 
@@ -20,6 +23,7 @@ from tgclone import fast, thumbs
 from tgclone.config import DOWNLOAD_DIR, Config
 
 log = logging.getLogger("tgclone")
+richtext.install()  # spoilers in Telethon's HTML (every other style is built in)
 
 # order matters: sticker/gif/voice/video_note are documents too
 _TYPES = ("sticker", "voice", "video_note", "gif", "audio", "video", "photo", "contact", "document")
@@ -75,7 +79,13 @@ class CloneMessage:
 
     def __init__(self, message: Message) -> None:
         self.message = message
-        self.text: str = message.text or ""
+        # HTML keeps every Telegram style: quote / expandable quote, bold, italic, underline,
+        # strike, spoiler, code, pre, links, mentions, premium emoji (markdown can't)
+        try:
+            self._orig = tl_html.unparse(message.message or "", message.entities or [])
+        except Exception:
+            self._orig = message.text or ""
+        self.text: str = self._orig
         self.raw_text: str = message.raw_text or ""
         self.sender_id = message.sender_id
         self.file_type = file_type(message)
@@ -85,7 +95,7 @@ class CloneMessage:
 
     @property
     def text_changed(self) -> bool:
-        return self.text != (self.message.text or "")
+        return self.text != self._orig
 
     async def download(self, max_mb: int = 0, max_disk_mb: int = 0, progress=None) -> str:
         """Download media once (cached), returns local path."""
@@ -191,7 +201,7 @@ async def _uploaded_doc(client: TelegramClient, tm: CloneMessage, path: str,
         force_file=True if tm.file_type == "document" else None)
 
 
-_MD_EMOJI = re.compile(r"\[([^\]]+)\]\(emoji/\d+\)")
+_MD_EMOJI = re.compile(r'<tg-emoji emoji-id="\d+">(.*?)</tg-emoji>', re.S)  # premium emoji in HTML
 async def _is_premium(client) -> bool:
     """Cached on the client itself (account has Telegram Premium / is a bot)."""
     cached = getattr(client, "_tgc_premium", None)
@@ -272,7 +282,7 @@ async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
                 files.append(path)
         captions = [_MD_EMOJI.sub(r"\1", tm.text) if plain_emoji else tm.text for tm in tms]
         return _as_list(await retry(client.send_file, dest, files,
-                                    caption=captions, reply_to=reply_to,
+                                    caption=captions, reply_to=reply_to, parse_mode="html",
                                     progress_callback=up if download else None))
 
     tm, msg = tms[0], tms[0].message
@@ -300,18 +310,21 @@ async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
             # big document: fast parallel upload, original attributes kept
             media = await _uploaded_doc(client, tm, path, thumb, up)
             return _as_list(await retry(client.send_file, dest, media, caption=text,
-                                        formatting_entities=ents, reply_to=reply_to))
+                                        formatting_entities=ents, reply_to=reply_to,
+                                        parse_mode="html"))
         return _as_list(await retry(client.send_file, dest, path, caption=text,
                                     formatting_entities=ents, reply_to=reply_to,
-                                    progress_callback=up, **kw))
+                                    progress_callback=up, parse_mode="html", **kw))
 
     media = None if tm.file_type == "text" else msg.media
     if media is None and not text:
         return []
     if tm.file_type == "poll":
+        if ents is None and text:
+            text, ents = tl_html.parse(text)
         return await _send_poll(client, dest, msg, text, ents, reply_to)
     return _as_list(await retry(client.send_message, dest, text, file=media,
-                                formatting_entities=ents, reply_to=reply_to,
+                                formatting_entities=ents, reply_to=reply_to, parse_mode="html",
                                 link_preview=bool(msg.web_preview)))
 
 

@@ -6,6 +6,7 @@ It was built by merging **tgcf**, **Telethon-Channel-Clone**, **clonechat** and 
 
 ![User screens: menu, clone, job card, premium, profile, login](docs/screenshots/tgclone_screens_1.png)
 ![Owner screens: admin panel, premium, user, settings, thumbnail, plugins](docs/screenshots/tgclone_screens_2.png)
+![Start screen, colours, limits, start text](docs/screenshots/tgclone_screens_3.png)
 
 ## Quick start (owner, once)
 
@@ -48,7 +49,12 @@ Update: `git pull && .venv/bin/pip install -r requirements.txt -q`, then restart
 - Every new user gets a free trial (default 24h). **💎 Go Premium** shows the plans and prices you set (`7=₹49, 30=₹149, …`). A tap sends you a request with a one-tap **✅ Grant** button, and the user sees your payment info.
 - Users: approve / ban / force logout, add 1/7/30 days, remove premium. You can also use `/addpremium <id|@user> <days>` and `/rmpremium <id>`.
 - 🚫 Blocked chats: block by folder link `t.me/addlist/…`, `@username`, `t.me/c/…`, invite `t.me/+…` (only once you have joined it), `-100…` id or a forwarded message.
-- Access mode (open / approval / only me), per-user limits, start photo, ⭐ premium emoji, 🔍 premium emoji self-test.
+- Access mode (open / approval / only me). Jobs at once: free trial 1 and premium 3 (e.g. a channel, a group and a topics group together), both adjustable.
+- Start screen: start photo plus your own ✏️ start text (`{name}` `{bot}` `{plan}` `{id}`; your bold, quotes and premium emoji are kept). Also ⭐ premium emoji and 🔍 premium emoji self-test.
+
+**Every Telegram style is copied**: quote and expandable quote, bold, italic, underline, strike, spoiler, code, pre, links, mentions and premium emoji, even after caption / replace / style plugins change the text.
+
+**Buttons**: one premium icon per button. « Back / Cancel are red, settings that are ON are green, everything else is blue.
 
 **Premium emoji**: every screen and button uses the animated UI pack. Telegram rule (Bot API, Feb 2026): a bot can show custom emoji only if **the account that owns the bot in @BotFather has Telegram Premium**. Use 🔍 *Test premium emoji* in the admin panel to see what Telegram does.
 

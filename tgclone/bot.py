@@ -160,7 +160,7 @@ class Panel:
 
         resume=(kind, data): remembered so the job continues by itself after a restart.
         """
-        caps = self.app.caps or {}
+        caps = (self.hub.caps(self.app.uid) if self.hub else self.app.caps) or {}
         self.app.jobs.max_jobs = min(self.app.cfg.max_jobs, caps.get("max_jobs", 99))
         if self.hub:
             self.hub.check_capacity()  # all users together
@@ -241,7 +241,8 @@ class Panel:
         if name in ("start", "menu"):
             self.state.pop(event.sender_id, None)
             if self.hub is not None:
-                return await self.hub.send_start(event, await ui.main_menu(app))
+                intro = await self.hub.start_intro(event)
+                return await self.hub.send_start(event, await ui.main_menu(app, intro=intro))
             return await self.show(event, await ui.main_menu(app))
         if name == "help":
             return await self.show(event, (self.help(), [[ui.B("🏠 Menu", "m", "primary")]]))

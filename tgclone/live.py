@@ -66,7 +66,7 @@ def register(app: App) -> list:
                     file = msg.media
             for d, mid in mapped.items():
                 await _safe(app.sender.edit_message(d, mid, text, formatting_entities=ents,
-                                                    file=file))
+                                                    file=file, parse_mode="html"))
             if media_changed:
                 app.store.set_media_key(chat, msg.id, new_key)
         except Exception as e:

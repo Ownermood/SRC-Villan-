@@ -50,13 +50,13 @@ PACK = {
 
 # every other emoji the screens use -> closest emoji of the pack (so all of them animate)
 ALIAS = {
-    "⏱": "⏰", "⏳": "⏰", "⏸": "📴", "▫": "☑", "♻": "↩", "⚪": "⚫", "⛔": "🚫", "✖": "❌",
+    "⏱": "⏰", "⏳": "⏰", "⏸": "📴", "▫": "⚫", "♻": "↩", "⚪": "⚫", "⛔": "🚫", "✖": "❌",
     "❔": "ℹ", "❗": "⚠", "⭕": "📹", "🆔": "🔑", "🎁": "🛍", "🎉": "👍", "🎞": "🖼",
     "🎬": "📹", "🎯": "📍", "🎵": "🎧", "🏠": "🖥", "👁": "🔍", "👑": "🏅", "👤": "👨‍🦰",
     "👥": "🫂", "💡": "☀", "💤": "📴", "💧": "💦", "📌": "📍", "📏": "↔", "📤": "⬆",
     "📥": "⬇", "📨": "📬", "🔁": "↪", "🔄": "↕", "🔐": "🔑", "🔒": "🔑", "🔤": "🔠",
     "🗂": "🗃", "😕": "💔", "🛡": "💼", "🟢": "🔛", "🤖": "👩‍💻", "🧩": "⚙", "🧸": "❤",
-    "🧾": "📑", "👇": "⬇", "🔥": "⚡",
+    "🧾": "📑", "👇": "⬇", "🔥": "⚡", "🤝": "👍", "✏": "✍",
 }
 PACK.update({k.replace(VS, ""): PACK[v.replace(VS, "")] for k, v in ALIAS.items()})
 
@@ -126,8 +126,45 @@ def _decorate_button(b):
     style = types.KeyboardButtonStyle(
         bg_primary=getattr(st, "bg_primary", None), bg_danger=getattr(st, "bg_danger", None),
         bg_success=getattr(st, "bg_success", None), icon=doc_id(m.group(0)))
-    text = b.text[m.end():].strip() or b.text
+    # one icon only: other emoji in the label are dropped; an emoji-only label keeps the icon alone
+    text = re.sub(r"\s{2,}", " ", _RE.sub("", b.text[m.end():])).strip() or BLANK
     return types.KeyboardInlineButton(text, b.type, style=style)
+
+
+BLANK = "ㅤ"  # Telegram needs a non-empty button label
+
+
+def paint(buttons):
+    """Colours for every bot button: « Back / Cancel red, Refresh green, anything already
+    coloured (ON toggles green, dangerous actions red) kept, everything else blue."""
+    if not buttons or not isinstance(buttons, list):
+        return buttons
+    out = []
+    for row in buttons:
+        if not isinstance(row, list):
+            out.append(row)
+            continue
+        new = []
+        for b in row:
+            if isinstance(b, types.KeyboardInlineButton):
+                label = _RE.sub("", b.text).strip()
+                st = b.style
+                has = st is not None and (st.bg_primary or st.bg_danger or st.bg_success)
+                icon = getattr(st, "icon", None)
+                if label.startswith("«") or label in ("Back", "Cancel") or label.endswith("Cancel"):
+                    color = "danger"
+                elif "Refresh" in label:
+                    color = "success"
+                elif has:
+                    new.append(b)
+                    continue
+                else:
+                    color = "primary"
+                b = types.KeyboardInlineButton(b.text, b.type, style=types.KeyboardButtonStyle(
+                    icon=icon, **{f"bg_{color}": True}))
+            new.append(b)
+        out.append(new)
+    return out
 
 
 def decorate(screen: Tuple[str, Optional[list]]) -> Tuple[str, Optional[list]]:
@@ -186,6 +223,8 @@ def install(client) -> None:
         # only the bot's own screens in private chats - never cloned posts in groups/channels
         if kw.get("formatting_entities") or not _is_private(args[0] if args else kw.get("entity")):
             return await fn(*args, **kw)
+        if kw.get("buttons") is not None:
+            kw = dict(kw, buttons=paint(kw["buttons"]))  # colours, even with premium emoji off
         if where == "caption":
             text = kw.get("caption")
         elif where == "send":

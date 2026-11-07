@@ -16,7 +16,8 @@ log = logging.getLogger("tgclone")
 
 class HubSettings(BaseModel):
     mode: str = "open"  # open = anyone | approve = owner approves | owner = only the owner
-    user_max_jobs: int = Field(2, ge=1, le=10)  # parallel jobs per user (owner: unlimited by this)
+    user_max_jobs: int = Field(1, ge=1, le=10)  # jobs at once on the free trial
+    premium_max_jobs: int = Field(3, ge=1, le=20)  # jobs at once with premium (channel + group + topics)
     user_max_batch: int = Field(0, ge=0)  # posts per save job per user (0 = no limit)
     max_total_jobs: int = Field(10, ge=1, le=100)  # all users together
     max_users: int = Field(0, ge=0)  # 0 = unlimited logged-in users
@@ -26,6 +27,7 @@ class HubSettings(BaseModel):
     premium_emoji: bool = True  # animated custom emoji in texts and buttons
     plans: str = "7=₹49, 30=₹149, 90=₹349"  # days=price shown on the Get premium screen
     pay_info: str = ""  # how to pay (UPI id, link...) shown after a plan is chosen
+    start_text: str = ""  # owner's /start message (HTML, {name} {bot} {plan} {id}); "" = default
 
 
 def load_key(secret_key: str, key_file: Path) -> bytes:

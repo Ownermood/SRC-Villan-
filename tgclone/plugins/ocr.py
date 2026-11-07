@@ -32,6 +32,8 @@ class Ocr(Plugin):
         text = await asyncio.to_thread(self._read, path)  # never block the bot
         if not text:
             return tm
+        import html
+        text = html.escape(text, quote=False)
         if self.cfg.keep_caption and tm.text:
             tm.text = f"{tm.text}\n\n{text}"
         else:

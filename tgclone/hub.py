@@ -39,7 +39,8 @@ PANEL_CMDS = ["start", "menu", "help", "list", "add", "forward", "remove", "togg
 HUB_CMDS = ["login", "logout", "account", "profile", "admin", "addpremium", "rmpremium",
             "block", "unblock"]
 OWNER_CMDS = {"admin", "addpremium", "rmpremium", "block", "unblock"}
-HUB_CALLBACKS = {"lg", "hw", "otp", "ac", "lo", "LO", "LD", "bm", "bx", "gp", "bp", "prd", "apP", "apI",
+HUB_CALLBACKS = {"lg", "hw", "otp", "ac", "lo", "LO", "LD", "bm", "bx", "gp", "bp", "prd", "apP", "apI", "ast",
+                 "adp3",
                  "ad", "adm", "adu", "adv", "adb", "adl", "adp", "adj", "adx", "adt", "ap", "dn",
                  "apm", "apg", "apr", "apl", "atr", "apt", "apa", "apx", "abl", "abk", "aub",
                  "aac", "alm", "asp", "aps", "apd", "aem", "aet"}
@@ -78,6 +79,7 @@ class Hub:
         self._bot_handlers: Dict[int, list] = {}  # bot-only users' live handlers on the shared bot
         self._start_media = None  # cached uploaded start photo
         self.owner_username = ""  # for the "Message the owner" button
+        self.bot_name = "SRC Villan Bot"
         self._buy_asked: Dict[int, float] = {}  # user -> last premium request (anti-spam)
         self._tasks = []
 
@@ -98,6 +100,8 @@ class Hub:
         emoji.install(self.bot)  # every bot message / edit / caption gets premium emoji
         me = await self.bot.get_me()
         log.info("Bot @%s started", getattr(me, "username", "?"))
+        self.bot_name = " ".join(filter(None, [getattr(me, "first_name", ""), getattr(me, "last_name", "")])) \
+            or getattr(me, "username", "") or "SRC Villan Bot"
 
         if self.secrets.session_string:  # legacy: owner session from .env
             client = self.make_client(self.secrets.session_string)
@@ -188,9 +192,30 @@ class Hub:
                 log.info("Migrated %s to %s", src, home)
 
     def caps(self, uid: int) -> Optional[dict]:
+        """Limits by plan: premium runs more jobs at once than the free trial. Owner: none."""
         if uid == self.owner:
             return None
-        return {"max_jobs": self.settings.user_max_jobs, "max_batch": self.settings.user_max_batch}
+        premium = self.plan_status(uid)["kind"] in ("premium", "free")
+        jobs = self.settings.premium_max_jobs if premium else self.settings.user_max_jobs
+        return {"max_jobs": jobs, "max_batch": self.settings.user_max_batch, "premium": premium}
+
+    async def start_intro(self, event) -> str:
+        """The owner's /start text with the user's name filled in."""
+        import html as _html
+        uid = event.sender_id
+        try:
+            s = await event.get_sender()
+            first = getattr(s, "first_name", "") or "there"
+        except Exception:
+            first = "there"
+        tpl = self.settings.start_text or ui.DEFAULT_START
+        values = {"name": f'<a href="tg://user?id={uid}">{_html.escape(first)}</a>',
+                  "first": _html.escape(first), "bot": _html.escape(self.bot_name), "id": str(uid),
+                  "plan": ui.plan_label(self.plan_status(uid))}
+        try:
+            return tpl.format(**values)
+        except (KeyError, IndexError, ValueError):
+            return tpl
 
     def _new_app(self, uid: int) -> App:
         self._migrate_legacy(uid)
@@ -331,6 +356,7 @@ class Hub:
         self.acc.set_plan(uid, expires, "premium")
         if uid in self.ws:
             self.ws[uid][0].paused = False
+            self.ws[uid][0].caps = self.caps(uid)  # premium job limit right away
         return expires
 
     def remove_plan(self, uid: int) -> None:
@@ -595,7 +621,8 @@ class Hub:
     async def show_welcome(self, event, edit: bool = False) -> None:
         acc = self.access(event.sender_id)
         screen = ui.welcome(self.settings.trial_hours if self.settings.premium_enabled else 0,
-                            owner_only=acc == "private", pending=acc == "pending")
+                            owner_only=acc == "private", pending=acc == "pending",
+                            intro=await self.start_intro(event))
         if edit:
             await self._show(event, screen, edit=True)
         else:
@@ -698,6 +725,24 @@ class Hub:
             await self._notify(uid, "➖ Your premium was removed by the owner.")
             return await self._show(event, ui.admin_screen((f"➖ Premium removed for <code>{uid}</code>.",
                                              [[ui.B("« Premium", "apm")]])))
+        if kind == "start":
+            from telethon.extensions import html as tl_html
+            text = (msg.raw_text or "").strip()
+            if text == "-":
+                self.settings.start_text = ""
+            else:
+                # keep the owner's formatting (bold, quotes, premium emoji...) as HTML
+                html_text = tl_html.unparse(msg.message or "", msg.entities or []) if msg.entities else text
+                try:
+                    html_text.format(name="", first="", bot="", id="", plan="")
+                except (KeyError, IndexError, ValueError) as e:
+                    raise ValueError(f"Unknown placeholder {e}. Use {{name}} {{bot}} {{plan}} {{id}}")
+                self.settings.start_text = html_text[:900]
+            self.acc.save_settings(self.settings)
+            self.admin_wait = None
+            await event.respond("✅ Start text saved. Preview:")
+            return await self.send_start(event, ui.welcome(self.settings.trial_hours,
+                                                           intro=await self.start_intro(event)))
         if kind in ("plans", "pay"):
             text = (msg.raw_text or "").strip()
             clear = text == "-"
@@ -799,9 +844,11 @@ class Hub:
             return await show(ui.admin_access(self))
         if k == "alm":
             return await show(ui.admin_limits(self))
-        if k in ("adj", "adx", "adt"):
+        if k in ("adj", "adx", "adt", "adp3"):
             up = parts[1] == "+"
-            if k == "adj":
+            if k == "adp3":
+                st.premium_max_jobs = max(1, min(20, st.premium_max_jobs + (1 if up else -1)))
+            elif k == "adj":
                 st.user_max_jobs = max(1, min(10, st.user_max_jobs + (1 if up else -1)))
             elif k == "adt":
                 st.max_total_jobs = max(1, min(100, st.max_total_jobs + (1 if up else -1)))
@@ -813,6 +860,9 @@ class Hub:
             return await show(ui.admin_limits(self))
         if k == "aet":
             return await show(await self.emoji_test(event.sender_id))
+        if k == "ast":
+            self.admin_wait = {"kind": "start"}
+            return await show(ui.admin_prompt("start"))
         if k == "aem":
             st.premium_emoji = not st.premium_emoji
             emoji.set_enabled(st.premium_emoji)

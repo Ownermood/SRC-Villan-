@@ -249,7 +249,9 @@ def test_limits_for_users_not_owner(hubenv):
     with pytest.raises(ValueError, match="500 posts"):
         run(save_range(hub.ws[5][0], "chan", 1, 600, 5))
     press(hub, "adj:+", OWNER)
-    assert hub.ws[5][0].caps["max_jobs"] == 3
+    assert hub.caps(5)["max_jobs"] == 2, "trial: 1 + 1"
+    hub.add_days(5, 30)
+    assert hub.caps(5)["max_jobs"] == 3 and hub.ws[5][0].caps["max_jobs"] == 3, "premium: 3 at once"
     hub.settings.max_total_jobs = 1
     from tgclone.jobs import Job
     app = hub.ws[OWNER][0]

@@ -1,6 +1,7 @@
+import html
 import re
 
-from tgclone.plugins import STYLE_CODES, Plugin
+from tgclone.plugins import STYLE_CODES, Plugin, as_html, on_text_nodes
 
 
 class Replace(Plugin):
@@ -12,12 +13,13 @@ class Replace(Plugin):
             return tm
         for old, new in self.cfg.text.items():
             if not self.cfg.regex:
-                text = text.replace(old, new)
+                o, n = html.escape(old, quote=False), as_html(new)
+                text = on_text_nodes(text, lambda t, o=o, n=n: t.replace(o, n))
             elif new in STYLE_CODES:  # style the matched part, e.g. {"\\d+": "bold"}
-                s = STYLE_CODES[new]
-                text = re.sub(old, lambda m: f"{s}{m.group(0)}{s}", text)
+                a, b = STYLE_CODES[new]
+                text = on_text_nodes(text, lambda t, old=old: re.sub(old, lambda m: f"{a}{m.group(0)}{b}", t))
             else:
-                text = re.sub(old, new, text)
+                text = on_text_nodes(text, lambda t, old=old, new=new: re.sub(old, new, t))
         tm.text = text
         return tm
 

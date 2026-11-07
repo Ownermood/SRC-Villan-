@@ -480,3 +480,80 @@ def test_buy_premium_flow(hubenv):
     ev = press(hub, "bp:365", 5)
     assert "owner@upi" in ev.edits[-1][0]
     assert ui.parse_plans("7=₹49, bad, 0=x, 30 = $5") == [(7, "₹49"), (30, "$5")]
+
+
+def test_every_telegram_style_survives_plugins():
+    """Quote (incl. expandable), spoiler, underline, bold, link, premium emoji: kept after plugins."""
+    from telethon.extensions import html as tl_html
+    from fakes import Client as C
+    from tgclone.plugins import apply_plugins, load_plugins
+    text = "Quote line\nhidden secret under bold link 😀"
+    ents = [types.MessageEntityBlockquote(0, 10, collapsed=True),
+            types.MessageEntitySpoiler(18, 6), types.MessageEntityUnderline(25, 5),
+            types.MessageEntityBold(31, 4), types.MessageEntityTextUrl(36, 4, url="https://x.y"),
+            types.MessageEntityCustomEmoji(41, 2, document_id=5)]
+    m = Msg(1, text, chat_id=-1)
+    m.message, m.entities = text, ents
+    cfg = Config()
+    cfg.plugins.caption.check, cfg.plugins.caption.footer = True, "\n— via <b>MyChan</b> & co"
+    cfg.plugins.replace.check, cfg.plugins.replace.text = True, {"secret": "SECRET", "a": "@"}
+    tm = run(apply_plugins(load_plugins(cfg.plugins), CloneMessage(m)))
+    sent = {}
+
+    class Premium(C):
+        async def get_me(self):
+            return _t.SimpleNamespace(premium=True, bot=False)
+
+        async def send_message(self, dest, text, file=None, formatting_entities=None, parse_mode=None, **kw):
+            sent.update(text=text, ents=formatting_entities, pm=parse_mode)
+            return await super().send_message(dest, text, file=file, **kw)
+    run(send(Premium(), 7, [tm], cfg))
+    assert sent["pm"] == "html" and sent["ents"] is None
+    plain, out = tl_html.parse(sent["text"])
+    kinds = {type(e).__name__ for e in out}
+    assert {"MessageEntityBlockquote", "MessageEntitySpoiler", "MessageEntityUnderline",
+            "MessageEntityBold", "MessageEntityTextUrl", "MessageEntityCustomEmoji"} <= kinds
+    assert any(getattr(e, "collapsed", False) for e in out), "expandable quote stays expandable"
+    assert "SECRET" in plain and "— via MyChan & co" in plain
+    assert 'href="https://x.y"' in sent["text"], "replace never touches tags / links"
+    # untouched posts: Telegram's own entities are sent as they are
+    m2 = Msg(2, text, chat_id=-1)
+    m2.message, m2.entities = text, ents
+    run(send(Premium(), 7, [CloneMessage(m2)], Config()))
+    assert sent["ents"] == ents and sent["text"] == text
+
+
+def test_buttons_one_icon_and_colours():
+    from telethon import Button
+    from tgclone import emoji
+    emoji.set_enabled(True)
+    rows = [[Button.inline("✅ 🗂 Topics", b"a", style="success"), Button.inline("▫️ Via bot", b"b")],
+            [Button.inline("➖", b"c"), Button.inline("« Back", b"m"), Button.inline("🔄 Refresh", b"r")],
+            [Button.inline("❌ Cancel", b"x", style="danger")]]
+    out = emoji.decorate(("x", emoji.paint(rows)))[1]
+    topics, via = out[0]
+    assert topics.text == "Topics" and topics.style.bg_success, "one icon, no second emoji, ON = green"
+    assert via.style.bg_primary and via.style.icon == emoji.PACK["⚫"], "OFF = blue with a neutral icon"
+    minus, back, refresh = out[1]
+    assert minus.text == emoji.BLANK and minus.style.icon == emoji.PACK["➖"], "emoji-only label not doubled"
+    assert back.style.bg_danger and refresh.style.bg_success
+    assert out[2][0].style.bg_danger
+
+
+def test_start_text_and_premium_jobs(hubenv):
+    from test_hub import OWNER, login, press, say
+    hub = hubenv.new_hub()
+    login(hub, OWNER, "+91000000001", env=hubenv)
+    ev = say(hub, "/start", 9)
+    assert "Welcome" in ev.out[-1][0] and '<a href="tg://user?id=9">' in ev.out[-1][0]
+    press(hub, "ast", OWNER)
+    ev = say(hub, "🤝 Hello {name}, plan: {plan} {oops}", OWNER)
+    assert "Unknown placeholder" in ev.out[-1][0]
+    say(hub, "🤝 Hello {name} on {bot} ({plan})", OWNER)
+    assert "{name}" in hub.settings.start_text
+    ev = say(hub, "/start", 9)
+    text = ev.out[-1][0]
+    assert 'Hello <a href="tg://user?id=9">User9</a>' in text and hub.bot_name in text
+    assert hub.settings.user_max_jobs == 1 and hub.settings.premium_max_jobs == 3
+    press(hub, "adp3:+", OWNER)
+    assert hub.settings.premium_max_jobs == 4

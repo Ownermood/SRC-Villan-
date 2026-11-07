@@ -1,3 +1,5 @@
+import html
+
 from tgclone.plugins import STYLE_CODES, Plugin
 
 
@@ -8,8 +10,8 @@ class Fmt(Plugin):
         style = self.cfg.style
         if style == "preserve" or style not in STYLE_CODES or not tm.raw_text:
             return tm
-        s = STYLE_CODES[style]
-        tm.text = f"{s}{tm.raw_text}{s}"
+        open_, close = STYLE_CODES[style]
+        tm.text = f"{open_}{html.escape(tm.raw_text, quote=False)}{close}"
         return tm
 
 

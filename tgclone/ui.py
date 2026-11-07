@@ -74,24 +74,31 @@ def chat_from_text(text: str):
 
 
 # ------------------------------------------------------------------ screens
-async def main_menu(app: App) -> Screen:
+DEFAULT_START = ("<blockquote>🤝 Welcome: <b>{name}</b> to <b>{bot}</b> — clone channels & groups "
+                 "on Telegram</blockquote>\n<blockquote>💡 Tap ❔ Help to learn every feature.</blockquote>")
+
+
+async def main_menu(app: App, intro: str = "") -> Screen:
     run = app.jobs.running()
     dests = {d for v in app.from_to.values() for d in v}
     plugins = ", ".join(p.id_ for p in app.plugins) or "none"
     hub = getattr(app, "hub", None)
-    lines = [
+    status = [
         f"{'🟢' if app.from_to and not app.paused else '⚪'} <b>Live</b> · {len(app.from_to)} source(s) → {len(dests)} chat(s)"
         + (" · ⏸ paused" if app.paused else ""),
         f"{'⏳' if run else '💤'} <b>Jobs</b> · {len(run)} running",
         f"🧩 <b>Plugins</b> · {esc(plugins)}",
     ]
+    name = esc(getattr(hub, "bot_name", "") or "SRC Villan Bot")
+    text = f"⚡ <b>{name}</b> • TG Clone\n\n" + (f"{intro}\n\n" if intro else "")
+    text += "<b>Status</b>\n<blockquote>" + "\n".join(status) + "</blockquote>\n"
     if hub is not None:
-        lines.append(f"💎 <b>Plan</b> · {plan_label(hub.plan_status(app.uid))}")
-        lines.append("🤖 <b>Mode</b> · without login (new posts only)" if app.botmode
-                     else "🔐 <b>Mode</b> · logged in (all features)")
-    tip = ("<i>💡 Add me as admin in your chats, then ➕ New forward.</i>" if app.botmode
-           else "<i>💡 Send any t.me post link to save it.</i>")
-    text = "<b>⚡ tgclone</b> · <i>control panel</i>\n\n<blockquote>" + "\n".join(lines) + "</blockquote>\n" + tip
+        mode = ("🤖 <b>Mode</b> · without login (new posts only)" if app.botmode
+                else "🔐 <b>Mode</b> · Logged in (all features unlocked)")
+        text += (f"<b>Account</b>\n<blockquote>💎 <b>Plan</b> · {plan_label(hub.plan_status(app.uid))}\n"
+                 f"{mode}</blockquote>\n")
+    text += ("<i>💡 Add me as admin in your chats, then ➕ New forward.</i>" if app.botmode
+             else "<i>💡 Send any t.me post link to save it.</i>")
     buttons = [
         [B("🔁 Clone a chat", "cl", "success")],
         [B("📡 Forwards", "fl:0", "primary"), B("➕ New forward", "na", "primary")],
@@ -488,9 +495,10 @@ def plan_label(st: dict) -> str:
 
 
 # ------------------------------------------------------------------ user side
-def welcome(trial_hours: int = 24, owner_only: bool = False, pending: bool = False) -> Screen:
+def welcome(trial_hours: int = 24, owner_only: bool = False, pending: bool = False,
+            intro: str = "") -> Screen:
     text = (
-        "<b>⚡ tgclone</b> · <i>Telegram cloner bot</i>\n\n<blockquote>"
+        "<b>⚡ tgclone</b> · <i>Telegram cloner bot</i>\n\n" + (f"{intro}\n\n" if intro else "") + "<blockquote>"
         "📡 Auto-forward channels & groups in real time\n"
         "🔁 Copy a full history — even protected chats\n"
         "🗂 Groups with topics cloned topic by topic\n"
@@ -716,7 +724,7 @@ def admin_view(hub) -> Screen:
         [_a("💎 Premium", "apm"), _a("🚫 Blocked chats", "abl")],
         [_a("🔐 Access", "aac"), _a("⚙️ Limits", "alm")],
         [_a("🖼 Start photo", "asp"), _a(f"⭐ Premium emoji: {'on' if st.premium_emoji else 'off'}", "aem")],
-        [_a("🔍 Test premium emoji", "aet")],
+        [_a("✏️ Start text", "ast"), _a("🔍 Test premium emoji", "aet")],
         [B("🔄 Refresh", "ad"), B("« Back", "m")],
     ]
     return text, rows
@@ -753,10 +761,12 @@ def admin_access(hub) -> Screen:
 def admin_limits(hub) -> Screen:
     st = hub.settings
     return ("<b>⚙️ Limits</b> · <i>for users, not for you</i>\n\n<blockquote>"
-            f"⏳ Jobs at once per user · <b>{st.user_max_jobs}</b>\n"
+            f"🎁 Jobs at once · free trial · <b>{st.user_max_jobs}</b>\n"
+            f"💎 Jobs at once · premium · <b>{st.premium_max_jobs}</b> (e.g. channel + group + topics)\n"
             f"📥 Posts per save · <b>{st.user_max_batch or '∞ no limit'}</b>\n"
             f"📊 Jobs at once, all users · <b>{st.max_total_jobs}</b></blockquote>",
-            [[B("➖", "adj:-"), B(f"⏳ {st.user_max_jobs} jobs", "noop"), B("➕", "adj:+")],
+            [[B("➖", "adj:-"), B(f"🎁 Trial {st.user_max_jobs}", "noop"), B("➕", "adj:+")],
+             [B("➖", "adp3:-"), B(f"💎 Premium {st.premium_max_jobs}", "noop"), B("➕", "adp3:+")],
              [B("➖", "adx:-"), B(f"📥 {st.user_max_batch or '∞'}/save", "noop"), B("➕", "adx:+")],
              [B("➖", "adt:-"), B(f"📊 {st.max_total_jobs} total", "noop"), B("➕", "adt:+")],
              [B("« Admin", "ad")]])
@@ -806,11 +816,16 @@ def admin_premium_list(hub, page: int = 0) -> Screen:
 
 @admin_screen
 def admin_prompt(kind: str) -> Screen:
-    back = {"premium": "apm", "rmpremium": "apm", "block": "abl", "photo": "asp",
+    back = {"premium": "apm", "rmpremium": "apm", "block": "abl", "photo": "asp", "start": "ad",
             "plans": "apm", "pay": "apm"}[kind]
     texts = {
         "premium": "<b>➕ Give premium</b>\n\nSend <code>user_id days</code> or <code>@username days</code>.\n"
                    "Example: <code>5021 30</code>\n<i>Days are added on top of time left.</i>",
+        "start": "<b>✏️ Start text</b>\n\nSend the message users see on /start (under the start photo). "
+                 "Bold, quotes, premium emoji — your formatting is kept.\n<blockquote>"
+                 "<code>{name}</code> user's name · <code>{bot}</code> bot name · "
+                 "<code>{plan}</code> their plan · <code>{id}</code> their id</blockquote>\n"
+                 "Example: <code>🤝 Welcome {name} to {bot}!</code>\nSend <code>-</code> for the default.",
         "plans": "<b>💰 Plans & prices</b>\n\nSend <code>days=price</code> separated by commas.\n"
                  "Example: <code>7=₹49, 30=₹149, 90=₹349</code>\nSend <code>-</code> to hide the plans.",
         "pay": "<b>💳 Payment info</b>\n\nWhat users see after choosing a plan — UPI id, payment "

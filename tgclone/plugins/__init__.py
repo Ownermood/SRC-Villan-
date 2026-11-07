@@ -6,6 +6,7 @@ modify() returns the CloneMessage (kept) or None (dropped). It can be sync or as
 import importlib
 import inspect
 import logging
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -15,7 +16,22 @@ from tgclone.message import CloneMessage
 log = logging.getLogger("tgclone")
 
 ORDER = ("filter", "ocr", "replace", "fmt", "caption", "mark")
-STYLE_CODES = {"bold": "**", "italics": "__", "code": "`", "strike": "~~", "plain": ""}
+# message text inside the bot is HTML (keeps quotes, spoilers, underline... intact)
+STYLE_CODES = {"bold": ("<b>", "</b>"), "italics": ("<i>", "</i>"), "code": ("<code>", "</code>"),
+               "strike": ("<s>", "</s>"), "plain": ("", "")}
+_TAG = re.compile(r"(<[^>]+>)")
+_HTML_HINT = re.compile(r"</?(b|i|u|s|a|code|pre|blockquote|tg-spoiler|tg-emoji|strong|em|del)\b", re.I)
+
+
+def as_html(text: str) -> str:
+    """User-written text (header, footer, replacement): HTML if it has tags, else escaped."""
+    import html
+    return text if _HTML_HINT.search(text or "") else html.escape(text or "", quote=False)
+
+
+def on_text_nodes(html_text: str, fn) -> str:
+    """Apply fn to the visible text only, never inside tags."""
+    return "".join(p if p.startswith("<") else fn(p) for p in _TAG.split(html_text))
 
 
 class Plugin:
