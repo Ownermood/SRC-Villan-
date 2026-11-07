@@ -114,6 +114,8 @@ class Config(BaseModel):
     send_via_bot: bool = False  # user account reads, BOT_TOKEN account sends
     protected_fallback: bool = True  # download + re-upload when copy is blocked
     max_file_mb: int = 2000  # skip bigger files on download (0 = no limit)
+    max_disk_mb: int = 6000  # total temp download space; downloads wait when full (0 = off)
+    max_jobs: int = Field(3, ge=1, le=10)  # clone/save jobs running at the same time
     live: LiveSettings = LiveSettings()
     past: PastSettings = PastSettings()
     save: SaveSettings = SaveSettings()

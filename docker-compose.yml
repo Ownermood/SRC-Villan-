@@ -1,0 +1,8 @@
+services:
+  tgclone:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped   # auto-restart after crash / reboot
+    command: ["python", "-m", "tgclone", "live"]

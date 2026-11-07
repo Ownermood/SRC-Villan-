@@ -18,13 +18,31 @@ class Store:
             CREATE TABLE IF NOT EXISTS progress(key TEXT PRIMARY KEY, last_id INTEGER);
             """
         )
+        cols = [r[1] for r in self.db.execute("PRAGMA table_info(msg_map)")]
+        if "media_key" not in cols:  # migrate v1 databases
+            self.db.execute("ALTER TABLE msg_map ADD COLUMN media_key INTEGER")
+            self.db.commit()
 
-    def add(self, src_chat: int, src_id: int, dest_chat: int, dest_id: int) -> None:
+    def add(self, src_chat: int, src_id: int, dest_chat: int, dest_id: int,
+            media_key: Optional[int] = None) -> None:
         with self.db:
             self.db.execute(
-                "INSERT OR REPLACE INTO msg_map VALUES (?,?,?,?)",
-                (src_chat, src_id, dest_chat, dest_id),
+                "INSERT OR REPLACE INTO msg_map(src_chat, src_id, dest_chat, dest_id, media_key)"
+                " VALUES (?,?,?,?,?)",
+                (src_chat, src_id, dest_chat, dest_id, media_key),
             )
+
+    def media_key(self, src_chat: int, src_id: int) -> Optional[int]:
+        row = self.db.execute(
+            "SELECT media_key FROM msg_map WHERE src_chat=? AND src_id=? LIMIT 1",
+            (src_chat, src_id),
+        ).fetchone()
+        return row[0] if row else None
+
+    def set_media_key(self, src_chat: int, src_id: int, media_key: Optional[int]) -> None:
+        with self.db:
+            self.db.execute("UPDATE msg_map SET media_key=? WHERE src_chat=? AND src_id=?",
+                            (media_key, src_chat, src_id))
 
     def get(self, src_chat: int, src_id: int) -> Dict[int, int]:
         rows = self.db.execute(

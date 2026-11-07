@@ -33,6 +33,36 @@ class FileTooBig(Exception):
     pass
 
 
+def media_key(msg: Message) -> Optional[int]:
+    """Stable id of the attached photo/document (detects media replacement on edit)."""
+    obj = msg.photo or msg.document
+    return getattr(obj, "id", None)
+
+
+def _dir_size(path) -> int:
+    try:
+        return sum(f.stat().st_size for f in path.iterdir() if f.is_file())
+    except FileNotFoundError:
+        return 0
+
+
+async def _wait_disk(need: int, max_disk_mb: int, timeout: int = 1800) -> None:
+    """Block until temp dir has room (other jobs free space as they finish)."""
+    if not max_disk_mb:
+        return
+    cap = max_disk_mb * 1024 * 1024
+    if need > cap:
+        raise FileTooBig(f"{need / 1048576:.0f} MB > max_disk_mb={max_disk_mb}")
+    waited = 0
+    while _dir_size(DOWNLOAD_DIR) + need > cap:
+        if waited >= timeout:
+            raise FileTooBig("download folder full (max_disk_mb), gave up waiting")
+        if waited == 0:
+            log.warning("Download folder full, waiting for space")
+        await asyncio.sleep(5)
+        waited += 5
+
+
 class CloneMessage:
     """What plugins modify; the original Message is never mutated."""
 
@@ -50,7 +80,7 @@ class CloneMessage:
     def text_changed(self) -> bool:
         return self.text != (self.message.text or "")
 
-    async def download(self, max_mb: int = 0) -> str:
+    async def download(self, max_mb: int = 0, max_disk_mb: int = 0, progress=None) -> str:
         """Download media once (cached), returns local path."""
         if self._downloaded:
             return self._downloaded
@@ -60,11 +90,30 @@ class CloneMessage:
         if max_mb and size > max_mb * 1024 * 1024:
             raise FileTooBig(f"{size / 1048576:.0f} MB > max_file_mb={max_mb}")
         DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        path = await self.message.download_media(file=str(DOWNLOAD_DIR) + os.sep)
+        await _wait_disk(size, max_disk_mb)
+        cb = (lambda c, t: progress("down", c, t)) if progress else None
+        path = await self.message.download_media(file=str(DOWNLOAD_DIR) + os.sep,
+                                                 progress_callback=cb)
         if not path:
             raise FileNotFoundError("download failed")
         self._downloaded = path
         self.track(path)
+        return path
+
+    async def download_thumb(self) -> Optional[str]:
+        """Original thumbnail, so re-uploaded videos/files keep their preview."""
+        doc = self.message.document
+        if doc is None or not getattr(doc, "thumbs", None) or self.file_type == "sticker":
+            return None
+        try:
+            DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+            path = await self.message.download_media(
+                file=str(DOWNLOAD_DIR / f"thumb_{self.message.id}_{doc.id}.jpg"), thumb=-1)
+        except Exception as e:  # thumbnail is cosmetic, never fail the send
+            log.debug("Thumb download failed: %s", e)
+            return None
+        if path:
+            self.track(path)
         return path
 
     def track(self, path: str) -> None:
@@ -112,12 +161,15 @@ def _file_kwargs(tm: CloneMessage) -> dict:
 
 
 async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
-                reply_to: Optional[int], download: bool, max_mb: int) -> list:
+                reply_to: Optional[int], download: bool, cfg: Config, progress=None) -> list:
+    up = (lambda c, t: progress("up", c, t)) if progress else None
     if len(tms) > 1:  # album
-        files = [tm.new_file or (await tm.download(max_mb) if download else tm.message.media)
+        files = [tm.new_file or (await tm.download(cfg.max_file_mb, cfg.max_disk_mb, progress)
+                                 if download else tm.message.media)
                  for tm in tms]
         return _as_list(await retry(client.send_file, dest, files,
-                                    caption=[tm.text for tm in tms], reply_to=reply_to))
+                                    caption=[tm.text for tm in tms], reply_to=reply_to,
+                                    progress_callback=up if download else None))
 
     tm, msg = tms[0], tms[0].message
     # exact formatting when text untouched, markdown when a plugin changed it
@@ -127,10 +179,15 @@ async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
         text, ents = msg.message or "", msg.entities
 
     if tm.new_file or (download and tm.file_type in FILE_TYPES):
-        path = tm.new_file or await tm.download(max_mb)
+        path = tm.new_file or await tm.download(cfg.max_file_mb, cfg.max_disk_mb, progress)
         kw = {} if tm.new_file else _file_kwargs(tm)
+        if not tm.new_file:
+            thumb = await tm.download_thumb()
+            if thumb:
+                kw["thumb"] = thumb
         return _as_list(await retry(client.send_file, dest, path, caption=text,
-                                    formatting_entities=ents, reply_to=reply_to, **kw))
+                                    formatting_entities=ents, reply_to=reply_to,
+                                    progress_callback=up, **kw))
 
     media = None if tm.file_type == "text" else msg.media
     if media is None and not text:
@@ -141,8 +198,12 @@ async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
 
 
 async def send(client: TelegramClient, dest: int, tms: List[CloneMessage], cfg: Config,
-               reply_to: Optional[int] = None, same_client: bool = True) -> list:
-    """Send one message or one album to dest. Returns sent messages (same order)."""
+               reply_to: Optional[int] = None, same_client: bool = True,
+               progress=None) -> list:
+    """Send one message or one album to dest. Returns sent messages (same order).
+
+    progress(direction, current, total) is called during download ("down") / upload ("up").
+    """
     protected = any(tm.message.noforwards for tm in tms)
     if cfg.forward_mode and same_client and not protected:
         try:
@@ -156,9 +217,9 @@ async def send(client: TelegramClient, dest: int, tms: List[CloneMessage], cfg: 
     if must_download and not cfg.protected_fallback and protected:
         raise ChatForwardsRestrictedError(None)
     try:
-        return await _copy(client, dest, tms, reply_to, must_download, cfg.max_file_mb)
+        return await _copy(client, dest, tms, reply_to, must_download, cfg, progress)
     except ChatForwardsRestrictedError:
         if must_download or not cfg.protected_fallback:
             raise
         log.info("Chat is protected, falling back to download + upload")
-        return await _copy(client, dest, tms, reply_to, True, cfg.max_file_mb)
+        return await _copy(client, dest, tms, reply_to, True, cfg, progress)

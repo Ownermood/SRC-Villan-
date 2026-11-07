@@ -6,7 +6,7 @@ from telethon import events
 
 from tgclone.app import App
 from tgclone.plugins import apply_plugins
-from tgclone.message import CloneMessage
+from tgclone.message import FILE_TYPES, CloneMessage, media_key
 
 log = logging.getLogger("tgclone")
 
@@ -35,6 +35,8 @@ def register(app: App) -> None:
         chat, msg = event.chat_id, event.message
         if chat not in app.from_to or not app.cfg.live.edit_sync:
             return
+        if not msg.edit_date:
+            return  # reactions / view counters also fire edit updates
         mapped = app.store.get(chat, msg.id)
         if not mapped:
             return  # never cloned; do not send duplicates
@@ -47,9 +49,24 @@ def register(app: App) -> None:
         tm = await apply_plugins(app.plugins, CloneMessage(msg))
         if not tm:
             return
+        new_key = media_key(msg)
+        media_changed = (new_key is not None and tm.file_type in FILE_TYPES
+                         and new_key != app.store.media_key(chat, msg.id))
+        text, ents = (tm.text, None) if tm.text_changed else (msg.message or "", msg.entities)
         try:
+            file = None
+            if media_changed:
+                if msg.noforwards or app.sender is not app.reader:
+                    file = await tm.download(app.cfg.max_file_mb, app.cfg.max_disk_mb)
+                else:
+                    file = msg.media
             for d, mid in mapped.items():
-                await _safe(app.sender.edit_message(d, mid, tm.text))
+                await _safe(app.sender.edit_message(d, mid, text, formatting_entities=ents,
+                                                    file=file))
+            if media_changed:
+                app.store.set_media_key(chat, msg.id, new_key)
+        except Exception as e:
+            log.warning("Edit sync failed: %s", e)
         finally:
             tm.cleanup()
 

@@ -1,4 +1,4 @@
-telethon>=1.36,<2
+telethon>=1.45,<2       # 1.45 = Telegram layer 229 (colored buttons)
 cryptg>=0.4            # fast encryption for downloads/uploads
 pydantic>=2.5,<3
 python-dotenv>=1.0

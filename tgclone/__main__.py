@@ -33,7 +33,7 @@ async def _run(args) -> None:
 
     if args.mode == "live":
         live.register(app)
-    bot.setup(app, live=args.mode == "live")
+    await bot.setup(app, live=args.mode == "live")
     await asyncio.gather(*(c.run_until_disconnected() for c in app.clients))
 
 
@@ -64,9 +64,19 @@ def main() -> None:
     if args.source and not args.dest:
         ap.error("--source needs --dest")
 
-    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
-                        format="%(asctime)s %(levelname)s %(message)s")
+    from logging.handlers import RotatingFileHandler
+
+    from tgclone.config import DATA_DIR
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    file_h = RotatingFileHandler(DATA_DIR / "tgclone.log", maxBytes=5_000_000, backupCount=3,
+                                 encoding="utf8")
+    file_h.setFormatter(logging.Formatter(fmt))
+    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format=fmt,
+                        handlers=[logging.StreamHandler(), file_h])
     logging.getLogger("tgclone").setLevel(logging.INFO)
+    logging.getLogger("telethon").setLevel(logging.INFO if args.verbose else logging.WARNING)
     try:
         asyncio.run(_login() if args.mode == "login" else _run(args))
     except KeyboardInterrupt:

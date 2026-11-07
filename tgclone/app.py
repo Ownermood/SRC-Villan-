@@ -9,7 +9,8 @@ from telethon.sessions import StringSession
 from telethon.tl.custom.message import Message
 
 from tgclone.config import DATA_DIR, Config, Forward, Secrets, load_config, norm_ref, save_config
-from tgclone.message import CloneMessage, send
+from tgclone.jobs import Job, JobManager
+from tgclone.message import CloneMessage, media_key, send
 from tgclone.plugins import apply_plugins, load_plugins
 from tgclone.storage import Store
 
@@ -30,8 +31,8 @@ class App:
         self.bot: Optional[TelegramClient] = None
         self.from_to: Dict[int, List[int]] = {}
         self.admins: set = set()
-        self.job: Optional[asyncio.Task] = None
-        self.job_info = ""
+        self.jobs = JobManager(self.cfg.max_jobs)
+        self.titles: Dict[int, str] = {}  # chat id -> display name (UI)
 
     # ------------------------------------------------------------ clients
     def _client(self, session) -> TelegramClient:
@@ -80,6 +81,25 @@ class App:
     async def resolve(self, ref) -> int:
         return await self.reader.get_peer_id(norm_ref(ref))
 
+    async def title(self, ref) -> str:
+        """Human name for a chat ref (cached). Falls back to the ref itself."""
+        try:
+            cid = await self.resolve(ref)
+        except Exception:
+            return str(ref)
+        if cid not in self.titles:
+            try:
+                ent = await self.reader.get_entity(cid)
+                self.titles[cid] = getattr(ent, "title", None) or " ".join(
+                    x for x in (getattr(ent, "first_name", ""), getattr(ent, "last_name", "")) if x
+                ) or str(cid)
+            except Exception:
+                return str(ref)
+        return self.titles[cid]
+
+    def reload_plugins(self) -> None:
+        self.plugins = load_plugins(self.cfg.plugins)
+
     async def load_forwards(self) -> None:
         mapping: Dict[int, List[int]] = {}
         for f in self.cfg.forwards:
@@ -109,7 +129,7 @@ class App:
         return out
 
     async def deliver(self, src: int, tms: List[CloneMessage], dests: List[int],
-                      skip_done: bool = False) -> int:
+                      skip_done: bool = False, progress=None) -> int:
         """Send message/album to every dest, map ids. Returns number of dests delivered."""
         if not tms:
             return 0
@@ -124,12 +144,13 @@ class App:
                     reply_to = self.store.get_one(src, first.reply_to_msg_id, d)
                 try:
                     sent = await send(self.sender, d, tms, self.cfg, reply_to,
-                                      same_client=self.sender is self.reader)
+                                      same_client=self.sender is self.reader,
+                                      progress=progress)
                 except Exception as e:
                     log.error("Send %s:%s -> %s failed: %s", src, first.id, d, e)
                     continue
                 for tm, s in zip(tms, sent):
-                    self.store.add(src, tm.message.id, d, s.id)
+                    self.store.add(src, tm.message.id, d, s.id, media_key(tm.message))
                 done += 1
         finally:
             for tm in tms:
@@ -138,7 +159,7 @@ class App:
 
 
 async def run_forward(app: App, fwd: Forward, fresh: bool = False,
-                      progress=None) -> int:
+                      job: Optional[Job] = None) -> int:
     """Past mode for one forward: clone history oldest -> newest, resumable."""
     if app.reader is not app.user:
         raise RuntimeError("Cloning history needs a user account (SESSION_STRING); bots cannot read history.")
@@ -160,18 +181,33 @@ async def run_forward(app: App, fwd: Forward, fresh: bool = False,
         msgs = list(buf)
         buf.clear()
         tms = await app.process(msgs)
-        await app.deliver(src, tms, dests, skip_done=True)
+        ok = await app.deliver(src, tms, dests, skip_done=True,
+                               progress=job.file_progress if job else None)
         app.store.set_progress(key, msgs[-1].id)
         count += len(msgs)
-        if progress and count % 50 < len(msgs):
-            await progress(count, msgs[-1].id)
+        if job:
+            job.last_id = msgs[-1].id
+            if tms and dests and ok == 0 and any(
+                    app.store.get_one(src, msgs[0].id, d) is None for d in dests):
+                job.failed += len(msgs)
+            else:
+                job.done += len(msgs)
         if p.delay:
             await asyncio.sleep(p.delay)
         if p.batch_size and p.batch_sleep and count % p.batch_size < len(msgs):
             await asyncio.sleep(p.batch_sleep)
 
+    if job:
+        try:  # range for the progress bar (1 cheap request)
+            last = await app.reader.get_messages(src, limit=1)
+            top = last[0].id if last else 0
+            job.start_id, job.end_id = start, min(fwd.end, top) if fwd.end else top
+        except Exception:
+            pass
     async for m in app.reader.iter_messages(src, reverse=True, min_id=start,
                                             max_id=fwd.end + 1 if fwd.end else 0):
+        if job and job.cancelled:
+            break
         if m.action is not None or (not m.message and not m.media):
             continue  # service / empty
         if buf and m.grouped_id != buf[0].grouped_id:
