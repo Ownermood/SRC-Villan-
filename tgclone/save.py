@@ -37,7 +37,13 @@ async def save_range(app: App, chat, first: int, last: int, target: int,
                      job: Optional[Job] = None) -> Tuple[int, int]:
     """Copy messages first..last of chat to target. Returns (sent, failed)."""
     if not app.user:
-        raise RuntimeError("Saving needs a user account (SESSION_STRING).")
+        raise RuntimeError("Saving posts needs a login (👤 My profile → 🔐 Login).")
+    try:
+        cid = await app.resolve(chat)
+    except Exception:
+        cid = None  # resolution problems surface when fetching
+    if cid is not None and app.blocked(cid):
+        raise ValueError("This chat can't be saved from (blocked by the owner).")
     s = app.cfg.save
     max_batch = min(s.max_batch, (app.caps or {}).get("max_batch", s.max_batch))
     if last - first + 1 > max_batch:

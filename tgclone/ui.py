@@ -77,29 +77,30 @@ def chat_from_text(text: str):
 async def main_menu(app: App) -> Screen:
     run = app.jobs.running()
     dests = {d for v in app.from_to.values() for d in v}
-    reader = "user" if app.reader is app.user else "bot"
-    sender = "bot" if app.sender is app.bot and app.bot else reader
     plugins = ", ".join(p.id_ for p in app.plugins) or "none"
-    text = (
-        "<b>⚡ tgclone</b> · <i>control panel</i>\n\n"
-        f"<blockquote>{'🟢' if app.from_to else '⚪'} <b>Live</b> · {len(app.from_to)} source(s) → {len(dests)} chat(s)\n"
-        f"{'⏳' if run else '💤'} <b>Jobs</b> · {len(run)} running\n"
-        f"🧩 <b>Plugins</b> · {esc(plugins)}\n"
-        f"👤 <b>Reads</b> as {reader} · 📤 <b>sends</b> as {sender}</blockquote>\n"
-        "<i>Tip: send any t.me post link (or link/10-50) to save it.</i>"
-    )
+    hub = getattr(app, "hub", None)
+    lines = [
+        f"{'🟢' if app.from_to and not app.paused else '⚪'} <b>Live</b> · {len(app.from_to)} source(s) → {len(dests)} chat(s)"
+        + (" · ⏸ paused" if app.paused else ""),
+        f"{'⏳' if run else '💤'} <b>Jobs</b> · {len(run)} running",
+        f"🧩 <b>Plugins</b> · {esc(plugins)}",
+    ]
+    if hub is not None:
+        lines.append(f"💎 <b>Plan</b> · {plan_label(hub.plan_status(app.uid))}")
+        lines.append("🤖 <b>Mode</b> · without login (new posts only)" if app.botmode
+                     else "🔐 <b>Mode</b> · logged in (all features)")
+    tip = ("<i>💡 Add me as admin in your chats, then ➕ New forward.</i>" if app.botmode
+           else "<i>💡 Send any t.me post link to save it.</i>")
+    text = "<b>⚡ tgclone</b> · <i>control panel</i>\n\n<blockquote>" + "\n".join(lines) + "</blockquote>\n" + tip
     buttons = [
-        [B("📋 Forwards", "fl:0", "primary"), B("➕ New forward", "na", "success")],
+        [B("📡 Forwards", "fl:0", "primary"), B("➕ New forward", "na", "success")],
         [B("📥 Save posts", "sv"), B(f"⏳ Jobs ({len(run)})" if run else "⏳ Jobs", "jl")],
         [B("🧩 Plugins", "pl"), B("⚙️ Settings", "st")],
-        [B("🔄 Refresh", "m"), B("❔ Help", "hp")],
+        [B("👤 My profile", "ac") if hub is not None else B("📊 Status", "noop"), B("❔ Help", "hp")],
     ]
-    hub = getattr(app, "hub", None)
-    if hub is not None:
-        extra = [B("👤 Account", "ac")]
-        if app.uid == hub.owner:
-            extra.append(B("🛡 Admin", "ad", "primary"))
-        buttons.insert(3, extra)
+    if hub is not None and app.uid == hub.owner:
+        buttons.append([B("🛡 Admin panel", "ad", "danger")])
+    buttons.append([B("🔄 Refresh", "m")])
     return text, buttons
 
 
@@ -327,19 +328,41 @@ def thumb_view(app: App) -> Screen:
     return text, [r for r in buttons if r]
 
 
-HELP = """<b>❔ How to use</b>
+def help_text(trial_hours: int = 24) -> str:
+    return f"""<b>❔ Help</b>
 
-<b>Live forwarding</b> – ➕ New forward → forward any message from the source channel (or send @user / -100id / link) → add destinations → ✅ Done. New posts, albums, edits (and deletes if enabled) are mirrored.
+<b>📡 Live forwarding</b>
+➕ New forward → forward a message from the source → then from your channel → ✅ Done.
+New posts, albums, edits, deletes and pins are copied automatically.
 
-<b>Copy old posts</b> – open a forward → 🔁 Clone history. It resumes after restarts and never sends duplicates.
+<b>🔁 Copy old posts</b> <i>(login)</i>
+📡 Forwards → open one → 🔁 Clone history. Resumes after restarts, never duplicates.
 
-<b>Save restricted posts</b> – send a post link: <code>t.me/c/123/45</code>, a range <code>t.me/chan/10-50</code>, or <code>/batch link 100</code>.
+<b>🗂 Groups with topics</b>
+Topics are created in the destination with the same name and icon, every post lands in its topic.
 
-<blockquote expandable><b>Text commands</b>
-/menu · /list · /add src dest… · /remove #n · /toggle #n
-/clone #n [fresh] · /clone src dest · /batch link count
-/jobs · /stop [id] · /setchat chat|off · /style name · /status
-/thumb · /setthumb (send or reply to a photo) · /delthumb</blockquote>"""
+<b>📥 Save restricted posts</b> <i>(login)</i>
+Send a post link <code>t.me/c/123/45</code> or a range <code>t.me/chan/10-50</code>.
+
+<b>🤖 Without login</b>
+Add me as <b>admin</b> in the source and destination (you must be their admin too).
+Only new posts, and only from chats where forwarding is allowed.
+
+<b>💎 Plan</b>
+New users get {trial_hours}h free. More time: 👤 My profile → 💎 Get premium.
+
+<blockquote expandable><b>⌨️ All commands</b>
+/start · /menu — control panel
+/profile — plan, account, logout
+/login · /logout — Telegram login
+/list · /add src dest… · /remove #n · /toggle #n
+/clone #n [fresh] · /clone src dest
+/batch link count · /jobs · /stop [id]
+/thumb · /setthumb · /delthumb · /style name
+/setchat chat|off · /status · /help</blockquote>"""
+
+
+HELP = help_text()
 
 
 def wizard_prompt(kind: str, app: App, data: dict = None) -> Screen:
@@ -422,41 +445,74 @@ def wizard_apply(kind: str, app: App, text: str) -> str:
 
 
 # ================================================================== multi-user
+import datetime as _dt
+import time as _time
+
+
 def mask_phone(phone: str) -> str:
     p = (phone or "").lstrip("+")
     return f"+{p[:2]}••••••{p[-2:]}" if len(p) > 4 else "—"
 
 
-def welcome(owner_only: bool = False, pending: bool = False) -> Screen:
+def left(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    d, h, m = seconds // 86400, seconds % 86400 // 3600, seconds % 3600 // 60
+    return f"{d}d {h}h" if d else (f"{h}h {m}m" if h else f"{m}m")
+
+
+def when(ts: float) -> str:
+    return _dt.datetime.fromtimestamp(ts).strftime("%d %b %Y, %H:%M")
+
+
+def plan_label(st: dict) -> str:
+    k = st["kind"]
+    if k == "owner":
+        return "👑 Owner · unlimited"
+    if k == "free":
+        return "✅ Free · unlimited"
+    if k == "expired":
+        return "⌛ Expired"
+    if k == "none":
+        return "🎁 Free trial starts when you begin"
+    icon = "⭐ Premium" if k == "premium" else "🎁 Trial"
+    return f"{icon} · {left(st['left'])} left"
+
+
+# ------------------------------------------------------------------ user side
+def welcome(trial_hours: int = 24, owner_only: bool = False, pending: bool = False) -> Screen:
     text = (
         "<b>⚡ tgclone</b> · <i>Telegram cloner bot</i>\n\n<blockquote>"
-        "📡 Auto-forward channels in real time\n"
-        "🔁 Copy a channel's full history — even protected ones\n"
+        "📡 Auto-forward channels & groups in real time\n"
+        "🔁 Copy a full history — even protected chats\n"
+        "🗂 Groups with topics cloned topic by topic\n"
         "📥 Save restricted posts from any link\n"
-        "🖼 Custom thumbnail · 💧 watermark · 🧹 filters</blockquote>\n"
-        "🔐 Log in once with your Telegram account — everything happens right here in the chat.\n"
-        "<i>Your login is stored encrypted. Log out anytime with /logout "
-        "(it also shows in Telegram → Settings → Devices).</i>"
+        "🖼 Thumbnail · 💧 watermark · 🔎 filters</blockquote>\n"
+        + (f"🎁 New here? You get <b>{trial_hours}h free</b>.\n" if trial_hours else "")
+        + "🔐 <b>Login</b> — every feature.\n"
+        "🤖 <b>Without login</b> — new posts only; I must be admin in your chats.\n"
+        "<i>Logins are stored encrypted. Log out anytime (Telegram → Settings → Devices too).</i>"
     )
     if owner_only:
         return text + "\n\n🔒 This bot is private.", None
     if pending:
-        return text + "\n\n⏳ Your access request is waiting for the owner's approval.", None
-    return text, [[B("🔐 Login with Telegram", "lg", "success")], [B("❔ How it works", "hw")]]
+        return text + "\n\n⏳ Your access request is waiting for the owner.", None
+    return text, [[B("🔐 Login with Telegram", "lg", "success")],
+                  [B("🤖 Use without login", "bm"), B("❔ How it works", "hw")]]
 
 
 HOW = """<b>❔ How it works</b>
 
-1️⃣ <b>Login</b> — tap 🔐 Login, share your number with the button, type the code on the keypad.
-2️⃣ <b>Forward</b> — ➕ New forward → forward a message from the source channel → then from your channel → ✅ Done.
+1️⃣ <b>Login</b> — 🔐 Login → 📲 share your number → type the code on the keypad.
+2️⃣ <b>Forward</b> — ➕ New forward → forward a message from the source → then from your channel → ✅ Done.
 3️⃣ <b>Relax</b> — new posts are copied automatically. 🔁 Clone history copies old posts too.
 
-<blockquote>Why a login? Bots can't read channel history or protected channels — your account can.
-Your account must be a member of the source and an admin of the destination.</blockquote>"""
+<blockquote><b>🤖 Without login?</b> Add me as admin in both chats (you must be admin too).
+Only new posts, and only chats where forwarding is allowed.
+<b>Why login?</b> Bots can't read old posts or protected chats — your account can.</blockquote>"""
 
 
 def login_phone() -> str:
-    return ("<b>🔐 Login · step 1/3</b>\n\nTap <b>📱 Share my number</b> below "
+    return ("<b>🔐 Login · step 1/3</b>\n\nTap <b>📲 Share my number</b> below "
             "(or type it with country code, e.g. <code>+919876543210</code>).\n\n"
             "<i>Send /cancel to stop.</i>")
 
@@ -470,92 +526,247 @@ def keypad(digits: str, note: str = "") -> Screen:
     if note:
         text += f"\n\n{note}"
     rows = [[B(str(n), f"otp:{n}") for n in r] for r in ((1, 2, 3), (4, 5, 6), (7, 8, 9))]
-    rows.append([B("⌫", "otp:b"), B("0", "otp:0"), B("✅ Done", "otp:ok", "success")])
-    rows.append([B("🔄 New code", "otp:r"), B("✖️ Cancel", "otp:x", "danger")])
+    rows.append([B("⬅ Delete", "otp:b"), B("0", "otp:0"), B("✅ Done", "otp:ok", "success")])
+    rows.append([B("↩ New code", "otp:r"), B("❌ Cancel", "otp:x", "danger")])
     return text, rows
 
 
 def login_password(note: str = "") -> Screen:
     return ("<b>🔐 Login · step 3/3</b>\n\nYour account has a <b>two-step password</b>. "
             "Send it as a message — I delete it immediately." + (f"\n\n{note}" if note else ""),
-            [[B("✖️ Cancel", "otp:x", "danger")]])
+            [[B("❌ Cancel", "otp:x", "danger")]])
 
 
-def account_view(info: dict, uid: int) -> Screen:
-    import datetime
-    since = datetime.datetime.fromtimestamp(info.get("created") or 0).strftime("%d %b %Y")
+def profile_view(hub, uid: int) -> Screen:
+    st = hub.plan_status(uid)
+    ws = hub.ws.get(uid)
+    app = ws[0] if ws else None
+    info = hub.acc.info(uid) or {}
+    name = info.get("name") or hub.acc.name_of(uid) or str(uid)
+    if app is not None and not app.botmode:
+        account = f"🔐 {esc(info.get('name') or '—')} · {mask_phone(info.get('phone'))} · 1/1 account"
+    elif app is not None:
+        account = "🤖 Without login (new posts only)"
+    else:
+        account = "— not connected"
+    lines = [f"👤 <b>Name</b> · {esc(name)}", f"🔑 <b>Id</b> · <code>{uid}</code>",
+             f"💎 <b>Plan</b> · {plan_label(st)}"]
+    if st.get("expires"):
+        lines.append(f"⏰ <b>{'Ended' if st['kind'] == 'expired' else 'Until'}</b> · {when(st['expires'])}")
+    lines.append(f"📲 <b>Account</b> · {account}")
+    if app is not None:
+        active = len(app.from_to)
+        lines.append(f"📡 <b>Forwards</b> · {len(app.cfg.forwards)} ({active} live) · "
+                     f"⏳ <b>Jobs</b> · {len(app.jobs.running())}")
+        lines.append(f"📋 <b>Copied messages</b> · {app.store.count():,}")
+    rows = []
+    if st["kind"] not in ("owner", "free"):
+        rows.append([B("💎 Get premium", "gp", "success")])
+    if app is None:
+        rows.append([B("🔐 Login", "lg", "success"), B("🤖 Without login", "bm")])
+    elif app.botmode:
+        rows.append([B("🔐 Login for all features", "lg", "success")])
+        rows.append([B("🚫 Stop bot-only mode", "bx", "danger")])
+    else:
+        rows.append([B("🚪 Logout", "lo", "danger")])
+    rows.append([B("« Back", "m")])
+    return "<b>👤 My profile</b>\n\n<blockquote>" + "\n".join(lines) + "</blockquote>", rows
+
+
+def get_premium(hub, uid: int) -> Screen:
+    owner = f'<a href="tg://user?id={hub.owner}">the owner</a>' if hub.owner else "the owner"
+    return (f"<b>💎 Get premium</b>\n\nMessage {owner} with your id <code>{uid}</code> "
+            "and the number of days you want. You'll get a message here as soon as it's active.",
+            [[B("👤 My profile", "ac"), B("« Back", "m")]])
+
+
+def plan_expired(hub, uid: int) -> Screen:
+    st = hub.plan_status(uid)
+    ended = f" on {when(st['expires'])}" if st.get("expires") else ""
+    return (f"<b>⌛ Your plan has ended{ended}</b>\n\n<blockquote>Live forwarding is paused.\n"
+            "Your forwards and settings are safe.</blockquote>\n💎 Get premium to continue.",
+            [[B("💎 Get premium", "gp", "success")], [B("👤 My profile", "ac"), B("❔ Help", "hw")]])
+
+
+def account_view(info: dict, uid: int) -> Screen:  # kept for old callers
     return ("<b>👤 Account</b>\n\n<blockquote>"
             f"<b>Telegram</b> · {esc(info.get('name') or '—')}\n"
-            f"<b>Phone</b> · {mask_phone(info.get('phone'))}\n"
-            f"<b>Your id</b> · <code>{uid}</code>\n<b>Since</b> · {since}</blockquote>\n"
-            "<i>Logging out ends this bot's session on Telegram. Your forwards and settings stay "
-            "saved unless you delete them.</i>",
+            f"<b>Phone</b> · {mask_phone(info.get('phone'))}\n<b>Your id</b> · <code>{uid}</code></blockquote>",
             [[B("🚪 Logout", "lo", "danger")], [B("« Back", "m")]])
 
 
+# ------------------------------------------------------------------ admin (owner only)
+def _a(text, data):  # admin section button: red theme
+    return B(text, data, "danger")
+
+
 def admin_view(hub) -> Screen:
-    st = hub.settings
-    c = hub.acc.counts()
+    st, c = hub.settings, hub.acc.counts()
     running = sum(len(app.jobs.running()) for app, _ in hub.ws.values())
-    up = int(__import__("time").time() - hub.started)
-    text = ("<b>🛡 Admin</b>\n\n<blockquote>"
-            f"<b>Users</b> · {c['users']} logged in · {len(hub.ws)} online\n"
-            f"<b>Jobs</b> · {running} running (max {st.max_total_jobs})\n"
-            f"<b>Access</b> · {dict(open='🌍 anyone', approve='✅ approved users', owner='🔒 only me')[st.mode]}"
-            f" · ⏳ {c['pending']} pending · ⛔ {c['banned']} banned\n"
-            f"<b>Per user</b> · {st.user_max_jobs} jobs · {st.user_max_batch} posts/save\n"
-            f"<b>Uptime</b> · {up // 3600}h {up % 3600 // 60}m</blockquote>")
-
-    def mode(key, label):
-        on = st.mode == key
-        return B(("● " if on else "") + label, f"adm:{key}", "primary" if on else None)
-
+    up = int(_time.time() - hub.started)
+    trial = sum(1 for p in hub.acc.plans() if p["kind"] == "trial" and p["expires"] > _time.time())
+    mode = dict(open="🌐 anyone", approve="✅ approved users", owner="🔒 only you")[st.mode]
+    text = ("<b>🛡 Admin panel</b> · <i>only you can see this</i>\n\n<blockquote>"
+            f"👥 <b>Users</b> · {c['users']} logged in · {c['botmode']} without login · {len(hub.ws)} online\n"
+            f"💎 <b>Premium</b> · {'on' if st.premium_enabled else 'off'} · {c['premium']} premium · "
+            f"{trial} on trial · trial {st.trial_hours}h\n"
+            f"⏳ <b>Jobs</b> · {running} running / {st.max_total_jobs}\n"
+            f"🔐 <b>Access</b> · {mode} · {c['pending']} waiting · {c['banned']} banned\n"
+            f"🚫 <b>Blocked chats</b> · {c['blocked']}\n"
+            f"⏰ <b>Uptime</b> · {left(up)}</blockquote>")
     rows = [
-        [mode("open", "🌍 Open"), mode("approve", "✅ Approval"), mode("owner", "🔒 Only me")],
-        [B("👥 Users", "adu:0"), B(f"⏳ Requests ({c['pending']})", "adp",
-                                   "success" if c["pending"] else None)],
-        [B("➖", "adj:-"), B(f"⏳ {st.user_max_jobs} jobs", "noop"), B("➕", "adj:+")],
-        [B("➖", "adx:-"), B(f"📥 {st.user_max_batch}/save", "noop"), B("➕", "adx:+")],
+        [_a("👥 Users", "adu:0"), _a(f"📬 Requests ({c['pending']})", "adp")],
+        [_a("💎 Premium", "apm"), _a("🚫 Blocked chats", "abl")],
+        [_a("🔐 Access", "aac"), _a("⚙️ Limits", "alm")],
+        [_a("🖼 Start photo", "asp"), _a(f"⭐ Premium emoji: {'on' if st.premium_emoji else 'off'}", "aem")],
         [B("🔄 Refresh", "ad"), B("« Back", "m")],
     ]
     return text, rows
 
 
+def admin_access(hub) -> Screen:
+    st = hub.settings
+
+    def mode(key, label):
+        on = st.mode == key
+        return B(("● " if on else "") + label, f"adm:{key}", "danger" if on else None)
+    return ("<b>🔐 Access</b>\n\n<blockquote>🌐 <b>Open</b> — anyone can use the bot\n"
+            "✅ <b>Approval</b> — new users need your OK (you get a request with buttons)\n"
+            "🔒 <b>Only me</b> — private bot</blockquote>",
+            [[mode("open", "🌐 Open")], [mode("approve", "✅ Approval")], [mode("owner", "🔒 Only me")],
+             [B("« Admin", "ad")]])
+
+
+def admin_limits(hub) -> Screen:
+    st = hub.settings
+    return ("<b>⚙️ Limits</b> · <i>for users, not for you</i>\n\n<blockquote>"
+            f"⏳ Jobs at once per user · <b>{st.user_max_jobs}</b>\n"
+            f"📥 Posts per save · <b>{st.user_max_batch}</b>\n"
+            f"📊 Jobs at once, all users · <b>{st.max_total_jobs}</b></blockquote>",
+            [[B("➖", "adj:-"), B(f"⏳ {st.user_max_jobs} jobs", "noop"), B("➕", "adj:+")],
+             [B("➖", "adx:-"), B(f"📥 {st.user_max_batch}/save", "noop"), B("➕", "adx:+")],
+             [B("➖", "adt:-"), B(f"📊 {st.max_total_jobs} total", "noop"), B("➕", "adt:+")],
+             [B("« Admin", "ad")]])
+
+
+def admin_premium(hub) -> Screen:
+    st, now = hub.settings, _time.time()
+    plans = hub.acc.plans()
+    prem = sum(1 for p in plans if p["kind"] == "premium" and p["expires"] > now)
+    trial = sum(1 for p in plans if p["kind"] == "trial" and p["expires"] > now)
+    expired = sum(1 for p in plans if p["expires"] <= now)
+    return ("<b>💎 Premium</b>\n\n<blockquote>"
+            f"⚙️ <b>Plans</b> · {'✅ on — users need trial or premium' if st.premium_enabled else '❌ off — everyone free'}\n"
+            f"🎁 <b>Free trial</b> · {st.trial_hours}h for every new user\n"
+            f"⭐ {prem} premium · 🎁 {trial} on trial · ⌛ {expired} expired</blockquote>\n"
+            "<i>➕ Give premium: send <code>user_id days</code> or <code>@username days</code>.</i>",
+            [[B("➕ Give premium", "apg", "success"), B("➖ Remove premium", "apr", "danger")],
+             [B("📋 Premium users", "apl:0")],
+             [B("➖", "atr:-"), B(f"🎁 Trial {st.trial_hours}h", "noop"), B("➕", "atr:+")],
+             [B(("✅" if st.premium_enabled else "❌") + " Plans " + ("on" if st.premium_enabled else "off"),
+                "apt", "success" if st.premium_enabled else None)],
+             [B("« Admin", "ad")]])
+
+
+def admin_premium_list(hub, page: int = 0) -> Screen:
+    now = _time.time()
+    plans = [p for p in hub.acc.plans() if p["expires"] > now]
+    pages = max(1, (len(plans) + PAGE - 1) // PAGE)
+    page = max(0, min(page, pages - 1))
+    rows = []
+    for p in plans[page * PAGE:(page + 1) * PAGE]:
+        icon = "⭐" if p["kind"] == "premium" else "🎁"
+        name = hub.acc.name_of(p["uid"]) or p["uid"]
+        rows.append([B(f"{icon} {str(name)[:20]} · {left(p['expires'] - now)}", f"adv:{p['uid']}")])
+    nav = ([B("‹ Prev", f"apl:{page - 1}")] if page else []) + \
+          ([B("Next ›", f"apl:{page + 1}")] if page < pages - 1 else [])
+    if nav:
+        rows.append(nav)
+    rows.append([B("« Premium", "apm")])
+    return f"<b>📋 Active plans</b> · {len(plans)}\n<i>⭐ premium · 🎁 trial</i>", rows
+
+
+def admin_prompt(kind: str) -> Screen:
+    back = {"premium": "apm", "rmpremium": "apm", "block": "abl", "photo": "asp"}[kind]
+    texts = {
+        "premium": "<b>➕ Give premium</b>\n\nSend <code>user_id days</code> or <code>@username days</code>.\n"
+                   "Example: <code>5021 30</code>\n<i>Days are added on top of time left.</i>",
+        "rmpremium": "<b>➖ Remove premium</b>\n\nSend the <code>user_id</code> or <code>@username</code>.",
+        "block": "<b>🚫 Block a chat</b>\n\nSend any of these — users won't be able to clone it:\n<blockquote>"
+                 "📁 folder link <code>t.me/addlist/…</code> (blocks every chat in it)\n"
+                 "🔗 <code>@username</code> or <code>t.me/username</code>\n"
+                 "🔑 private link <code>t.me/c/123…</code> or invite <code>t.me/+…</code>\n"
+                 "🆔 <code>-100…</code> id, or forward a message from the chat</blockquote>",
+        "photo": "<b>🖼 SET START PHOTO</b>\n━━━━━━━━━━━━━━━━━━━━\n🖼 Send a photo directly (best)\n"
+                 "🔗 or a direct image link: <code>https://….jpg</code>\n"
+                 "It will show big at the top of the /start screen.",
+    }
+    return texts[kind], [[B("❌ Cancel", back)]]
+
+
+def admin_blocked(hub) -> Screen:
+    items = hub.acc.blocked()
+    rows = [[B(f"❌ {str(b['title'] or b['chat_id'])[:26]}", f"aub:{b['chat_id']}")] for b in items[:20]]
+    rows.append([_a("➕ Block chat", "abk")])
+    rows.append([B("« Admin", "ad")])
+    more = f"\n<i>…and {len(items) - 20} more</i>" if len(items) > 20 else ""
+    return (f"<b>🚫 Blocked chats</b> · {len(items)}\n\nUsers can't clone, forward or save from these.\n"
+            f"<i>Tap one to unblock.</i>{more}", rows)
+
+
+def admin_photo(hub) -> Screen:
+    cur = hub.settings.start_photo
+    return ("<b>🖼 Start photo</b>\n\n<blockquote>"
+            f"{'✅ set · ' + esc(cur if cur.startswith('http') else 'uploaded photo') if cur else '— not set'}</blockquote>",
+            [[_a("🖼 Set start photo", "aps")] + ([B("🗑 Remove", "apd")] if cur else []),
+             [B("« Admin", "ad")]])
+
+
 def admin_users(hub, page: int = 0) -> Screen:
     users = hub.acc.users()
-    banned = hub.acc.by_state("banned")
     known = {u["uid"] for u in users}
-    users += [{"uid": b["uid"], "name": b["name"], "banned": True} for b in banned
+    for uid in hub.acc.botmode_users():
+        if uid not in known:
+            users.append({"uid": uid, "name": hub.acc.name_of(uid), "bot": True})
+            known.add(uid)
+    users += [{"uid": b["uid"], "name": b["name"]} for b in hub.acc.by_state("banned")
               if b["uid"] not in known]
     pages = max(1, (len(users) + PAGE - 1) // PAGE)
     page = max(0, min(page, pages - 1))
     rows = []
     for u in users[page * PAGE:(page + 1) * PAGE]:
-        icon = "⛔" if hub.acc.access(u["uid"]) == "banned" else ("🟢" if u["uid"] in hub.ws else "⚪")
-        rows.append([B(f"{icon} {(u.get('name') or '?')[:24]} · {u['uid']}", f"adv:{u['uid']}")])
-    nav = []
-    if page > 0:
-        nav.append(B("‹ Prev", f"adu:{page - 1}"))
-    if page < pages - 1:
-        nav.append(B("Next ›", f"adu:{page + 1}"))
+        if hub.acc.access(u["uid"]) == "banned":
+            icon = "🚫"
+        else:
+            icon = ("🟢" if u["uid"] in hub.ws else "⚫") + ("🤖" if u.get("bot") else "")
+        rows.append([B(f"{icon} {(u.get('name') or '?')[:22]} · {u['uid']}", f"adv:{u['uid']}")])
+    nav = ([B("‹ Prev", f"adu:{page - 1}")] if page else []) + \
+          ([B("Next ›", f"adu:{page + 1}")] if page < pages - 1 else [])
     if nav:
         rows.append(nav)
-    rows.append([B("« Back", "ad")])
-    return f"<b>👥 Users</b> · {len(users)}\n<i>🟢 online · ⚪ offline · ⛔ banned</i>", rows
+    rows.append([B("« Admin", "ad")])
+    return f"<b>👥 Users</b> · {len(users)}\n<i>🟢 online · ⚫ offline · 🤖 without login · 🚫 banned</i>", rows
 
 
 def admin_user(hub, uid: int) -> Screen:
     info = hub.acc.info(uid) or {}
     banned = hub.acc.access(uid) == "banned"
     ws = hub.ws.get(uid)
-    jobs = len(ws[0].jobs.running()) if ws else 0
-    fwds = len(ws[0].cfg.forwards) if ws else 0
-    text = (f"<b>👤 {esc(info.get('name') or uid)}</b>\n\n<blockquote>"
-            f"<b>Id</b> · <code>{uid}</code>\n<b>Phone</b> · {mask_phone(info.get('phone'))}\n"
-            f"<b>Status</b> · {'⛔ banned' if banned else ('🟢 online' if ws else '⚪ offline')}\n"
-            f"<b>Forwards</b> · {fwds} · <b>Jobs</b> · {jobs}</blockquote>")
-    rows = [[B("✅ Unban", f"adb:{uid}", "success") if banned else B("⛔ Ban", f"adb:{uid}", "danger")]]
-    if info:
+    st = hub.plan_status(uid)
+    name = info.get("name") or hub.acc.name_of(uid) or uid
+    mode = "🔐 login" if info else ("🤖 without login" if uid in hub.acc.botmode_users() else "—")
+    text = (f"<b>👤 {esc(name)}</b>\n\n<blockquote>"
+            f"🔑 <b>Id</b> · <code>{uid}</code>\n📲 <b>Phone</b> · {mask_phone(info.get('phone'))}\n"
+            f"🔐 <b>Mode</b> · {mode}\n"
+            f"⚫ <b>Status</b> · {'🚫 banned' if banned else ('🟢 online' if ws else 'offline')}\n"
+            f"💎 <b>Plan</b> · {plan_label(st)}\n"
+            f"📡 <b>Forwards</b> · {len(ws[0].cfg.forwards) if ws else 0} · "
+            f"⏳ <b>Jobs</b> · {len(ws[0].jobs.running()) if ws else 0}</blockquote>")
+    rows = [[B("➕ 1 day", f"apa:{uid}:1"), B("➕ 7 days", f"apa:{uid}:7"), B("➕ 30 days", f"apa:{uid}:30")]]
+    if st["kind"] in ("premium", "trial"):
+        rows.append([B("➖ Remove premium", f"apx:{uid}", "danger")])
+    rows.append([B("✅ Unban", f"adb:{uid}", "success") if banned else B("🚫 Ban", f"adb:{uid}", "danger")])
+    if ws or info:
         rows.append([B("🚪 Force logout", f"adl:{uid}", "danger")])
     rows.append([B("« Users", "adu:0")])
     return text, rows
@@ -564,8 +775,14 @@ def admin_user(hub, uid: int) -> Screen:
 def admin_pending(hub) -> Screen:
     pend = hub.acc.by_state("pending")
     if not pend:
-        return "<b>⏳ Requests</b>\n\nNo pending requests.", [[B("« Back", "ad")]]
+        return "<b>📬 Requests</b>\n\nNo pending requests.", [[B("« Admin", "ad")]]
     rows = [[B(f"✅ {(p['name'] or '?')[:18]} · {p['uid']}", f"ap:{p['uid']}", "success"),
-             B("✖️", f"dn:{p['uid']}", "danger")] for p in pend[:PAGE]]
-    rows.append([B("« Back", "ad")])
-    return f"<b>⏳ Requests</b> · {len(pend)}\nApprove or deny:", rows
+             B("❌", f"dn:{p['uid']}", "danger")] for p in pend[:PAGE]]
+    rows.append([B("« Admin", "ad")])
+    return f"<b>📬 Requests</b> · {len(pend)}\nApprove or deny:", rows
+
+
+def strip_tags(html: str) -> str:
+    """Visible text length check (captions are limited to 1024 chars)."""
+    import re as _re
+    return _re.sub(r"<[^>]+>", "", html)

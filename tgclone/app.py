@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.tl import types
 from telethon.tl.custom.message import Message
 
 from tgclone.config import (CONFIG_FILE, DATA_DIR, Config, Forward, Secrets, load_config, norm_ref,
@@ -38,6 +39,8 @@ class App:
         self.plugins = load_plugins(self.cfg.plugins, self.home)
         self.topics = Topics(self)  # forum groups: topic-by-topic cloning
         self.caps: Optional[dict] = None  # limits set by the bot owner (multi-user)
+        self.paused = False  # plan expired: live forwarding stops until renewed
+        self.botmode = False  # no login: the shared bot reads and sends
         self.hub = None  # set by Hub
         self.reader: Optional[TelegramClient] = None  # reads source chats
         self.sender: Optional[TelegramClient] = None  # writes to destinations
@@ -101,6 +104,38 @@ class App:
             log.warning("get_dialogs failed for %s: %s", self.uid, e)
         await self.load_forwards()
 
+    async def attach_bot(self, bot: TelegramClient) -> None:
+        """Multi-user without login: the shared bot reads (live only) and sends."""
+        self.user, self.bot, self.botmode = None, bot, True
+        self.reader = self.sender = self.control = bot
+        self.admins = {self.uid}
+        await self.load_forwards()
+
+    def blocked(self, chat_id: int) -> bool:
+        """Chat on the owner's block list (the owner himself is never blocked)."""
+        hub = self.hub
+        return bool(hub) and self.uid != hub.owner and chat_id in hub.acc.blocked_ids()
+
+    async def sync_pin(self, src: int, src_ids: List[int], pinned: bool) -> int:
+        """Pin / unpin the copies of src messages and delete the "pinned a message" notice."""
+        done = 0
+        for sid in src_ids:
+            for dest, mid in self.store.get(src, sid).items():
+                try:
+                    if pinned:
+                        notice = await self.sender.pin_message(dest, mid, notify=False)
+                        if isinstance(notice, Message) or getattr(notice, "id", None):
+                            try:  # remove the "X pinned a message" service message right away
+                                await self.sender.delete_messages(dest, notice.id)
+                            except Exception as e:
+                                log.debug("pin notice delete failed: %s", e)
+                    else:
+                        await self.sender.unpin_message(dest, mid)
+                    done += 1
+                except Exception as e:
+                    log.warning("%s %s:%s failed: %s", "Pin" if pinned else "Unpin", dest, mid, e)
+        return done
+
     @property
     def clients(self) -> List[TelegramClient]:
         return [c for c in (self.user, self.bot) if c]
@@ -138,6 +173,9 @@ class App:
                 dests = [await self.resolve(d) for d in f.dest]
             except Exception as e:
                 log.error("Forward %s skipped, cannot resolve: %s", f.name or f.source, e)
+                continue
+            if self.blocked(src):
+                log.warning("Forward from %s skipped: blocked by the owner", src)
                 continue
             mapping.setdefault(src, [])
             mapping[src] += [d for d in dests if d not in mapping[src] and d != src]
@@ -196,7 +234,10 @@ async def run_forward(app: App, fwd: Forward, fresh: bool = False,
                       job: Optional[Job] = None) -> int:
     """Past mode for one forward: clone history oldest -> newest, resumable."""
     if app.reader is not app.user:
-        raise RuntimeError("Cloning history needs a user account (SESSION_STRING); bots cannot read history.")
+        raise RuntimeError("Copying old posts needs a login (👤 My profile → 🔐 Login). "
+                           "Without login only new posts are forwarded.")
+    if app.blocked(await app.resolve(fwd.source)):
+        raise ValueError("This chat can't be cloned (blocked by the owner).")
     src = await app.resolve(fwd.source)
     dests = [await app.resolve(d) for d in fwd.dest]
     key = app.store.key(src, dests)
@@ -248,6 +289,12 @@ async def run_forward(app: App, fwd: Forward, fresh: bool = False,
                                             max_id=fwd.end + 1 if fwd.end else 0):
         if job and job.cancelled:
             break
+        if isinstance(m.action, types.MessageActionPinMessage) and m.reply_to_msg_id:
+            if buf:
+                await flush()
+            if app.cfg.live.pin_sync:
+                await app.sync_pin(src, [m.reply_to_msg_id], True)  # pins copied in order
+            continue
         if m.action is not None or (not m.message and not m.media):
             continue  # service / empty
         if buf and m.grouped_id != buf[0].grouped_id:

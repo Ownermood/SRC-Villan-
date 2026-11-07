@@ -17,10 +17,35 @@ class Bot(Client):
     def __init__(self):
         super().__init__()
         self.sent = []
+        self.perms = {}  # (chat, user or "me") -> is admin
+        self.protected = set()
+        self.users = {"@rahul": 5021}
 
     async def send_message(self, chat, text, buttons=None, **kw):
         self.sent.append((chat, text, buttons))
         return self._m()
+
+    async def send_file(self, chat, file, caption=None, buttons=None, **kw):
+        self.sent.append((chat, caption, buttons, file))
+        m = self._m()
+        m.media = "UPLOADED"
+        return m
+
+    async def get_permissions(self, chat, user):
+        if (chat, user) not in self.perms:
+            raise ValueError("not a participant")
+        adm = self.perms[(chat, user)]
+        return _t.SimpleNamespace(is_admin=adm, is_creator=False)
+
+    async def get_entity(self, ref):
+        if isinstance(ref, str) and ref in self.users:
+            return _t.SimpleNamespace(id=self.users[ref], first_name="Rahul", last_name=None)
+        if isinstance(ref, str):
+            raise ValueError("no user")
+        return _t.SimpleNamespace(title=f"Chat{ref}", noforwards=ref in self.protected)
+
+    def remove_event_handler(self, fn):
+        self.handlers = [h for h in self.handlers if h[0] is not fn]
 
     async def get_me(self):
         return _t.SimpleNamespace(id=999, username="tgclone_bot", bot=True)
@@ -79,32 +104,9 @@ class UserClient(Client):
         return []
 
 
-@pytest.fixture
-def hubenv(tmp_path, monkeypatch):
-    import tgclone.hub as hubmod
-    monkeypatch.setenv("OWNER_ID", str(OWNER))
-    monkeypatch.setenv("SESSION_STRING", "")
-    monkeypatch.setattr(hubmod, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(hubmod, "USERS_DIR", tmp_path / "users")
-    made = []
-
-    def factory(session):
-        c = UserClient(session)
-        c.twofa = factory.twofa
-        made.append(c)
-        return c
-    factory.twofa = False
-
-    def new_hub():
-        h = hubmod.Hub(live_mode=True, bot=Bot(), make_client=factory)
-        run(h.start())
-        return h
-    return _t.SimpleNamespace(new_hub=new_hub, made=made, factory=factory, tmp=tmp_path)
-
-
 async def _dispatch(hub, ev):
-    on_cmd, on_cb, on_text = [fn for fn, _ in hub.bot.handlers]
-    pattern = hub.bot.handlers[0][1].pattern
+    on_cmd, on_cb, on_text = hub.on_command, hub.on_callback, hub.on_text
+    pattern = next(e for fn, e in hub.bot.handlers if fn == hub.on_command).pattern
     try:
         if isinstance(ev, CallbackEvent):
             await on_cb(ev)
@@ -141,6 +143,10 @@ def login(hub, uid, phone, twofa=False, env=None):
     if twofa:
         say(hub, "pw", uid)
     return ev
+
+
+def datas(buttons):
+    return {b.type.data.decode() for row in buttons or [] for b in row if hasattr(b, "type")}
 
 
 def texts(ev):
@@ -201,15 +207,14 @@ def test_users_are_isolated(hubenv):
     assert "No forwards" in ev.out[-1][0]
     # main menu: account for everyone, admin only for owner
     ev = say(hub, "/start", 6)
-    labels = [b.text for row in ev.out[-1][1] for b in row]
-    assert "👤 Account" in labels and "🛡 Admin" not in labels
+    assert "ac" in datas(ev.out[-1][1]) and "ad" not in datas(ev.out[-1][1])
 
 
 def test_owner_admin_approval_ban_and_modes(hubenv):
     hub = hubenv.new_hub()
     login(hub, OWNER, "+91000000001", env=hubenv)
     ev = say(hub, "/start", OWNER)
-    assert "🛡 Admin" in [b.text for row in ev.out[-1][1] for b in row]
+    assert "ad" in datas(ev.out[-1][1])
     ev = say(hub, "/admin", 7)
     assert "Owner only" in ev.out[-1][0]
     press(hub, "adm:approve", OWNER)
@@ -229,14 +234,14 @@ def test_owner_admin_approval_ban_and_modes(hubenv):
     ev = say(hub, "/start", 7)
     assert "banned" in ev.out[-1][0]
     ev = press(hub, "lg", 7)
-    assert ev.answers[-1][0].startswith("⛔")
+    assert "banned" in ev.answers[-1][0]
     press(hub, "adb:7", OWNER)
     assert hub.acc.access(7) is None
     press(hub, "adm:owner", OWNER)
     ev = press(hub, "lg", 8)
     assert "private" in ev.out[-1][0]
     ev = press(hub, "adm:open", 8)
-    assert ev.answers[-1] == ("⛔ Owner only", True) and hub.settings.mode == "owner"
+    assert ev.answers[-1] == ("🚫 Owner only", True) and hub.settings.mode == "owner"
 
 
 def test_limits_for_users_not_owner(hubenv):
@@ -299,7 +304,7 @@ def test_cancel_login_and_phone_validation(hubenv):
     say(hub, "+91000000005", 5)
     client = hub.logins[5]["client"]
     ev = say(hub, "/cancel", 5)
-    assert 5 not in hub.logins and not client.connected and "cancelled" in ev.out[-1][0]
+    assert 5 not in hub.logins and not client.connected and "cancelled" in ev.out[-1][0].lower()
 
 
 def test_hub_screens_serialize():

@@ -89,6 +89,14 @@ class Client:
     async def delete_messages(self, dest, mid):
         self.calls.append(("del", dest, mid))
 
+    async def pin_message(self, dest, mid, notify=False):
+        self.calls.append(("pin", dest, mid))
+        self.n += 1
+        return _t.SimpleNamespace(id=self.n)  # the "pinned a message" service message
+
+    async def unpin_message(self, dest, mid):
+        self.calls.append(("unpin", dest, mid))
+
     async def upload_file(self, path, progress_callback=None):
         self.calls.append(("upload", path))
         return f"H:{path}"
@@ -187,6 +195,7 @@ def make_app(client=None):
     a.store = Store(Path(DATA_DIR) / f"t{next(_ids)}.db")
     a.plugins, a.admins, a.from_to, a.titles = [], {1}, {}, {}
     a.caps, a.hub, a.uid, a.home = None, None, 1, Path(DATA_DIR)
+    a.paused = a.botmode = False
     from tgclone.topics import Topics
     a.topics = Topics(a)
     c = client or Client()

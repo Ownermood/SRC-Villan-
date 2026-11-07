@@ -21,6 +21,8 @@ speedtest, broadcast, yt-dlp downloader, MongoDB, Dropbox-hosted pyrogram forks 
 ![Plugins, settings, thumbnail](docs/screenshots/tgclone_ui_2.png)
 ![Login inside Telegram, account](docs/screenshots/tgclone_users_1.png)
 ![Owner admin panel](docs/screenshots/tgclone_users_2.png)
+![Profile, plans, help, admin](docs/screenshots/tgclone_v4_1.png)
+![Premium, block list, start photo, limits](docs/screenshots/tgclone_v4_2.png)
 
 ## Ubuntu quick start
 
@@ -115,6 +117,18 @@ Text commands still work (and are the only option for a user account without a b
 }
 ```
 File types: `text photo video gif audio voice video_note sticker document poll contact other`.
+
+## Plans, admin panel and more (v4)
+
+- **Free trial + premium**: every new user gets a free trial (default 24h) when they first log in or start without-login mode. After that the owner adds premium days. Days stack on top of the time left. When a plan ends, live forwarding pauses (settings are kept), the user gets a message (plus a reminder 2h before), and only 👤 My profile / 💎 Get premium stay open. You can turn plans off to make everyone free.
+- **👤 My profile**: name, id, plan with time left and end date, linked account (1 per user), forwards, jobs, copied messages, logout.
+- **🛡 Admin panel** (red buttons, only the owner sees it): 👥 Users (ban, force logout, ➕1/7/30 days, remove premium) · 📬 Requests · 💎 Premium (give / remove by `user_id days` or `@username days`, list, trial hours, plans on/off) · 🚫 Blocked chats · 🔐 Access (open / approval / only me) · ⚙️ Limits · 🖼 Start photo · ⭐ Premium emoji.
+- **🚫 Blocked chats**: block a chat by folder link (`t.me/addlist/…`, blocks every chat in it), `@username`, `t.me/c/…`, invite `t.me/+…`, `-100…` id or a forwarded message. Users can't add it as a source, clone it or save from it. Existing live forwards from it stop.
+- **🤖 Without login**: users add the bot as admin in their chats (they must be admins too) and get live forwarding of new posts. Protected chats are refused. Logging in later keeps their settings.
+- **📌 Pins**: pinning and unpinning in the source is copied, and the "… pinned a message" notice in the destination is deleted at once. A history clone copies pins too.
+- **🖼 Start photo**: send a photo or an https image link in 🛡 Admin → Start photo. It shows big on top of /start.
+- **⭐ Premium emoji**: every screen and button uses the animated UI pack. If Telegram doesn't allow the bot to use custom emoji, it falls back to normal emoji automatically. You can switch this in the admin panel.
+- Owner commands: `/admin`, `/addpremium <id|@user> <days>`, `/rmpremium <id>`, `/block <chat|link|folder>`, `/unblock <chat>`.
 
 ## Groups with topics (forums)
 

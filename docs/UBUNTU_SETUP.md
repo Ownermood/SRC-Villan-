@@ -79,6 +79,17 @@ Aur features: 🔁 Clone history, 📥 post link bhejo to save, 🖼 thumbnail, 
 
 ---
 
+## Plan (users)
+
+- Naye user ko **24 ghante free** (pehli baar login ya "without login" shuru karne par)
+- Uske baad owner premium days deta hai → **👤 My profile** mein plan, kitna time bacha, kab tak — sab dikhta hai
+- Plan khatam → live forwarding ruk jaata hai (settings safe), 2 ghante pehle reminder aata hai
+
+## Without login (users)
+
+`/start` → **🤖 Use without login** → bot ko apne source aur destination mein **admin** banao (aap bhi dono ke admin ho) → ➕ New forward.
+Sirf naye posts, aur sirf woh chats jahan forwarding allowed hai (protected nahi). Purane posts / save ke liye login.
+
 ## Owner: 🛡 Admin panel
 
 | Option | Kaam |
@@ -86,7 +97,13 @@ Aur features: 🔁 Clone history, 📥 post link bhejo to save, 🖼 thumbnail, 
 | 🌍 Open / ✅ Approval / 🔒 Only me | Kaun use kar sakta hai. Approval mode mein har naye user ki request aapko buttons ke saath aati hai |
 | 👥 Users | Har user: online/offline, forwards, jobs · ⛔ Ban · 🚪 Force logout |
 | ⏳ Requests | Pending users ko approve / deny karo |
-| ➖ ➕ jobs/user, posts/save | Har user ki limit (owner par limit nahi) |
+| ⚙️ Limits | Har user ke jobs, posts/save, sab users ke total jobs (owner par limit nahi) |
+| 💎 Premium | ➕ Give premium: `user_id days` ya `@username days` · ➖ Remove · trial hours · plans on/off |
+| 🚫 Blocked chats | Folder link `t.me/addlist/…`, `@username`, `t.me/c/…`, invite `t.me/+…`, `-100…` id ya forwarded message — ye chats koi clone nahi kar sakta |
+| 🖼 Start photo | Photo bhejo ya `https://….jpg` link — /start par bada dikhega |
+| ⭐ Premium emoji | Animated emoji on/off (Telegram allow na kare to khud normal emoji) |
+
+Commands (sirf owner): `/admin` · `/addpremium 5021 30` · `/rmpremium 5021` · `/block t.me/addlist/xyz` · `/unblock -100123`
 
 ---
 

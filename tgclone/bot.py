@@ -41,6 +41,8 @@ class Panel:
 
     # ------------------------------------------------------------- helpers
     async def show(self, event, screen, edit=False):
+        if self.hub is not None:  # premium emoji + fallbacks live in the hub
+            return await self.hub._show(event, screen, edit)
         text, buttons = screen
         if not self.is_bot:
             buttons = None  # user accounts can't send inline keyboards
@@ -50,6 +52,19 @@ class Panel:
             return await event.respond(text, buttons=buttons, parse_mode="html", link_preview=False)
         except MessageNotModifiedError:
             return None
+
+    def help(self) -> str:
+        h = self.hub
+        return ui.help_text(h.settings.trial_hours if h else 24)
+
+    async def check_chat(self, ref, role: str) -> None:
+        """Block list + without-login rules (multi-user only)."""
+        if self.hub is not None:
+            await self.hub.check_chat(self.app, ref, role)
+
+    def needs_login(self, what: str) -> None:
+        if self.app.botmode:
+            raise ValueError(f"{what} needs a login. 👤 My profile → 🔐 Login.")
 
     def save(self, plugins=False):
         self.app.save()
@@ -187,6 +202,7 @@ class Panel:
 
     async def start_clone(self, event, fwd: Forward, fresh: bool):
         app = self.app
+        self.needs_login("Copying old posts")
         src = await app.resolve(fwd.source)
         dests = [await app.resolve(d) for d in fwd.dest]
         title = f"{await app.title(src)} → {len(dests)} chat(s){' (fresh)' if fresh else ''}"
@@ -195,6 +211,7 @@ class Panel:
 
     async def start_save(self, event, chat, first, last):
         app = self.app
+        self.needs_login("Saving posts")
         target = event.chat_id
         if app.cfg.save.target:
             target = await app.control.get_peer_id(app.cfg.save.target)
@@ -210,9 +227,11 @@ class Panel:
         app, p = self.app, self.p
         if name in ("start", "menu"):
             self.state.pop(event.sender_id, None)
+            if self.hub is not None:
+                return await self.hub.send_start(event, await ui.main_menu(app))
             return await self.show(event, await ui.main_menu(app))
         if name == "help":
-            return await self.show(event, (ui.HELP, [[ui.B("🏠 Menu", "m", "primary")]]))
+            return await self.show(event, (self.help(), [[ui.B("🏠 Menu", "m", "primary")]]))
         if name == "list":
             return await self.show(event, await ui.forwards_list(app))
         if name in ("add", "forward"):
@@ -305,8 +324,10 @@ class Panel:
         if not fwd.dest:
             raise ValueError("Add at least one destination")
         await app.resolve(fwd.source)  # validate before saving
+        await self.check_chat(fwd.source, "source")
         for d in fwd.dest:
             await app.resolve(d)
+            await self.check_chat(d, "dest")
         try:
             app.cfg.forwards[self.pick(str(fwd.source))] = fwd
         except ValueError:
@@ -333,7 +354,7 @@ class Panel:
                 await event.answer("Cancelled")
                 return await self.show(event, await ui.main_menu(app), edit=True)
             if k == "hp":
-                return await self.show(event, (ui.HELP, [[ui.B("« Back", "m")]]), edit=True)
+                return await self.show(event, (self.help(), [[ui.B("« Back", "m")]]), edit=True)
             if k == "fl":
                 return await self.show(event, await ui.forwards_list(app, int(parts[1])), edit=True)
             if k == "fv":
@@ -517,6 +538,7 @@ class Panel:
             if kind == "new_src":
                 ref = await self.chat_from_message(msg)
                 await app.resolve(ref)
+                await self.check_chat(ref, "source")
                 self.state[uid] = {"kind": "new_dest", "src": ref, "src_title": await app.title(ref),
                                    "dests": [], "titles": []}
                 return await self.show(event, ui.wizard_prompt("new_dest", app, self.state[uid]))
@@ -525,6 +547,7 @@ class Panel:
                 await app.resolve(ref)
                 if await app.resolve(ref) == await app.resolve(st["src"]):
                     raise ValueError("Destination can't be the source")
+                await self.check_chat(ref, "dest")
                 if ref not in st["dests"]:
                     st["dests"].append(ref)
                     st["titles"].append(await app.title(ref))

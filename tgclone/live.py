@@ -2,7 +2,7 @@
 
 import logging
 
-from telethon import events
+from telethon import events, utils
 from telethon.tl import types
 
 from tgclone.app import App
@@ -13,12 +13,12 @@ from tgclone.topics import topic_of
 log = logging.getLogger("tgclone")
 
 
-def register(app: App) -> None:
+def register(app: App) -> list:
     c = app.reader
 
     @c.on(events.NewMessage())
     async def on_new(event):
-        if event.chat_id not in app.from_to or event.message.grouped_id:
+        if app.paused or event.chat_id not in app.from_to or event.message.grouped_id:
             return  # albums are handled by on_album
         act = event.message.action
         if act is not None:
@@ -29,7 +29,7 @@ def register(app: App) -> None:
 
     @c.on(events.Album())
     async def on_album(event):
-        if event.chat_id not in app.from_to:
+        if app.paused or event.chat_id not in app.from_to:
             return
         tms = await app.process(event.messages)
         await app.deliver(event.chat_id, tms, app.from_to[event.chat_id])
@@ -37,7 +37,7 @@ def register(app: App) -> None:
     @c.on(events.MessageEdited())
     async def on_edit(event):
         chat, msg = event.chat_id, event.message
-        if chat not in app.from_to or not app.cfg.live.edit_sync:
+        if app.paused or chat not in app.from_to or not app.cfg.live.edit_sync:
             return
         if not msg.edit_date:
             return  # reactions / view counters also fire edit updates
@@ -77,12 +77,24 @@ def register(app: App) -> None:
     @c.on(events.MessageDeleted())
     async def on_delete(event):
         chat = event.chat_id
-        if chat is None or chat not in app.from_to or not app.cfg.live.delete_sync:
+        if app.paused or chat is None or chat not in app.from_to or not app.cfg.live.delete_sync:
             return  # chat_id is only known for channels/supergroups
         for sid in event.deleted_ids:
             for d, mid in app.store.get(chat, sid).items():
                 await _safe(app.sender.delete_messages(d, mid))
             app.store.remove(chat, sid)
+
+    @c.on(events.Raw(types=[types.UpdatePinnedChannelMessages, types.UpdatePinnedMessages]))
+    async def on_pin(update):
+        if app.paused or not app.cfg.live.pin_sync:
+            return
+        peer = (types.PeerChannel(update.channel_id)
+                if isinstance(update, types.UpdatePinnedChannelMessages) else update.peer)
+        chat = utils.get_peer_id(peer)
+        if chat in app.from_to:
+            await app.sync_pin(chat, list(update.messages), bool(update.pinned))
+
+    return [on_new, on_album, on_edit, on_delete, on_pin]  # to remove them later (shared bot)
 
 
 async def _safe(coro) -> None:

@@ -94,6 +94,7 @@ class LiveSettings(BaseModel):
     edit_sync: bool = True
     delete_sync: bool = False
     delete_on_edit: str = ".deleteMe"
+    pin_sync: bool = True  # pin / unpin copies too; the "pinned a message" notice is deleted
 
 
 class PastSettings(BaseModel):

@@ -20,6 +20,10 @@ class HubSettings(BaseModel):
     user_max_batch: int = Field(500, ge=10, le=10000)  # posts per save job per user
     max_total_jobs: int = Field(10, ge=1, le=100)  # all users together
     max_users: int = Field(0, ge=0)  # 0 = unlimited logged-in users
+    premium_enabled: bool = True  # plans: new users get a free trial, then need premium days
+    trial_hours: int = Field(24, ge=0, le=24 * 30)  # free trial for every new user (0 = none)
+    start_photo: str = ""  # path or https URL shown on top of /start
+    premium_emoji: bool = True  # animated custom emoji in texts and buttons
 
 
 def load_key(secret_key: str, key_file: Path) -> bytes:
@@ -50,6 +54,10 @@ class Accounts:
             CREATE TABLE IF NOT EXISTS access(uid INTEGER PRIMARY KEY, state TEXT, name TEXT,
                 updated REAL);
             CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE IF NOT EXISTS plans(uid INTEGER PRIMARY KEY, expires REAL, kind TEXT,
+                notified INTEGER DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS blocked(chat_id INTEGER PRIMARY KEY, title TEXT, added REAL);
+            CREATE TABLE IF NOT EXISTS botmode(uid INTEGER PRIMARY KEY, name TEXT, created REAL);
             """
         )
         try:
@@ -116,8 +124,65 @@ class Accounts:
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO kv VALUES ('hub', ?)", (s.model_dump_json(),))
 
+    # ---------------------------------------------------------- plans
+    def plan(self, uid: int) -> Optional[dict]:
+        row = self.db.execute("SELECT expires, kind, notified FROM plans WHERE uid=?", (uid,)).fetchone()
+        return dict(zip(("expires", "kind", "notified"), row)) if row else None
+
+    def set_plan(self, uid: int, expires: float, kind: str) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO plans VALUES (?,?,?,0)", (uid, expires, kind))
+
+    def set_notified(self, uid: int, level: int) -> None:
+        with self.db:
+            self.db.execute("UPDATE plans SET notified=? WHERE uid=?", (level, uid))
+
+    def plans(self) -> List[dict]:
+        rows = self.db.execute("SELECT uid, expires, kind, notified FROM plans ORDER BY expires DESC")
+        return [dict(zip(("uid", "expires", "kind", "notified"), r)) for r in rows]
+
+    # ---------------------------------------------------------- blocked chats
+    def block(self, chat_id: int, title: str) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO blocked VALUES (?,?,?)", (chat_id, title, time.time()))
+
+    def unblock(self, chat_id: int) -> None:
+        with self.db:
+            self.db.execute("DELETE FROM blocked WHERE chat_id=?", (chat_id,))
+
+    def blocked(self) -> List[dict]:
+        rows = self.db.execute("SELECT chat_id, title FROM blocked ORDER BY added DESC")
+        return [{"chat_id": c, "title": t} for c, t in rows]
+
+    def blocked_ids(self) -> set:
+        return {r[0] for r in self.db.execute("SELECT chat_id FROM blocked")}
+
+    # ---------------------------------------------------------- bot-only users
+    def add_botmode(self, uid: int, name: str) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO botmode VALUES (?,?,?)", (uid, name, time.time()))
+
+    def remove_botmode(self, uid: int) -> None:
+        with self.db:
+            self.db.execute("DELETE FROM botmode WHERE uid=?", (uid,))
+
+    def botmode_users(self) -> List[int]:
+        return [r[0] for r in self.db.execute("SELECT uid FROM botmode")]
+
+    def name_of(self, uid: int) -> str:
+        for sql in ("SELECT name FROM sessions WHERE uid=?", "SELECT name FROM botmode WHERE uid=?",
+                    "SELECT name FROM access WHERE uid=?"):
+            row = self.db.execute(sql, (uid,)).fetchone()
+            if row and row[0]:
+                return row[0]
+        return ""
+
     def counts(self) -> Dict[str, int]:
         c = {"users": self.db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]}
+        c["botmode"] = self.db.execute("SELECT COUNT(*) FROM botmode").fetchone()[0]
+        c["blocked"] = self.db.execute("SELECT COUNT(*) FROM blocked").fetchone()[0]
+        c["premium"] = self.db.execute("SELECT COUNT(*) FROM plans WHERE kind='premium' AND expires>?",
+                                       (time.time(),)).fetchone()[0]
         for st in ("pending", "approved", "banned"):
             c[st] = self.db.execute("SELECT COUNT(*) FROM access WHERE state=?", (st,)).fetchone()[0]
         return c
