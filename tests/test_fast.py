@@ -111,7 +111,8 @@ def test_big_files_use_several_connections(tmp_path, monkeypatch):
     out = run(fast.download(srv, doc_msg(big), str(tmp_path / "big.mp4")))
     assert open(out, "rb").read() == data
     assert set(used) == {0, 1, 2, 3}, "parts spread over 4 connections"
-    assert srv.max_inflight >= 8 and closed == [4] and srv.borrowed == 0
+    assert srv.max_inflight >= 8 and srv.borrowed == 0
+    assert srv._tgc_pools[4].refs == 0, "pool released (closed after IDLE_CLOSE)"
     used.clear()
     f = tmp_path / "up.bin"
     f.write_bytes(data)
@@ -119,7 +120,7 @@ def test_big_files_use_several_connections(tmp_path, monkeypatch):
     srv._get_dc = lambda dc: None
     handle = run(fast.upload(srv, str(f)))
     assert b"".join(srv.parts[i] for i in range(handle.parts)) == data
-    assert set(used) == {0, 1, 2, 3} and closed == [4, 4]
+    assert set(used) == {0, 1, 2, 3} and srv._tgc_pools[2].refs == 0
 
 
 def test_pool_failure_falls_back_to_one_connection(tmp_path, monkeypatch):
@@ -169,7 +170,7 @@ class FakeNet:
         net = self
 
         class Sender:
-            def __init__(self, key, loggers=None):
+            def __init__(self, key, loggers=None, **kw):
                 self.auth_key = key
 
             async def connect(self, conn):
@@ -204,3 +205,42 @@ def test_pool_exports_login_once_even_with_parallel_downloads(monkeypatch):
     assert net.exports == 1, "the authorised key is remembered"
     callers, _ = run(fast.open_pool(client, 5, 2))
     assert len(callers) == 2 and net.exports == 1, "home DC needs no export"
+
+
+
+def test_parallel_downloads_share_one_pool_and_resets_pause_it(tmp_path, monkeypatch):
+    """Real log: every file opened 4 connections (3 prefetched x 2 clones) -> Telegram reset them."""
+    big = 11 * 1024 * 1024
+    data = os.urandom(big)
+    srv = FileServer(data)
+    opened = []
+
+    async def pool(client, dc_id, n):
+        opened.append(dc_id)
+
+        async def call(req):
+            return await srv._call("pool", req)
+        return [call] * n, (lambda: asyncio.sleep(0))
+    monkeypatch.setattr(fast, "open_pool", pool)
+
+    async def three():
+        return await asyncio.gather(*(fast.download(srv, doc_msg(big), str(tmp_path / f"{i}.mp4"))
+                                      for i in range(3)))
+    outs = run(three())
+    assert all(open(o, "rb").read() == data for o in outs)
+    assert opened == [4], "3 parallel downloads, ONE set of connections"
+
+    # Telegram cuts the extra connections -> this file falls back, and pools pause for 10 min
+    srv2 = FileServer(data)
+
+    async def dead_pool(client, dc_id, n):
+        opened.append("dead")
+
+        async def call(req):
+            raise ConnectionError("Connection reset by peer")
+        return [call] * n, (lambda: asyncio.sleep(0))
+    monkeypatch.setattr(fast, "open_pool", dead_pool)
+    assert run(fast.download(srv2, doc_msg(big), str(tmp_path / "x.mp4"))) is None
+    assert srv2._tgc_pool_off > fast.time.time() + 500
+    out = run(fast.download(srv2, doc_msg(big), str(tmp_path / "y.mp4")))
+    assert open(out, "rb").read() == data and opened.count("dead") == 1, "paused: one connection"

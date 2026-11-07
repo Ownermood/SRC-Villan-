@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import random
+import time
 from typing import Callable, Optional
 
 from telethon import utils
@@ -22,6 +23,8 @@ WORKERS = 8  # requests in flight on one connection
 CONNECTIONS = 4  # big files: extra connections (Telegram limits speed per connection)
 PER_CONNECTION = 4  # requests in flight on each extra connection
 POOL_SIZE = 10 * 1024 * 1024  # use extra connections from this size
+IDLE_CLOSE = 60  # seconds an unused shared pool stays open
+PAUSE_AFTER_RESET = 600  # Telegram cut our extra connections: one connection for 10 min
 MIN_SIZE = 2 * 1024 * 1024  # smaller files: normal transfer is fine
 
 
@@ -42,7 +45,8 @@ async def open_pool(client, dc_id: int, n: int):
     senders = []
 
     def new_sender(key):
-        return network.MTProtoSender(key, loggers=client._log)
+        # no reconnect loop: if Telegram cuts an extra connection, the transfer falls back instead
+        return network.MTProtoSender(key, loggers=client._log, auto_reconnect=False, retries=2)
 
     async def connect(snd):
         await snd.connect(client._connection(dc.ip_address, dc.port, dc.id, loggers=client._log,
@@ -92,12 +96,62 @@ async def open_pool(client, dc_id: int, n: int):
                     return await snd.send(req)
                 except FloodWaitError as e:
                     await asyncio.sleep(e.seconds + 1)
-                except (ConnectionError, asyncio.TimeoutError):
-                    if attempt == 4:
-                        raise
-                    await asyncio.sleep(1 + attempt)
+            raise RuntimeError("Telegram kept asking to wait")
         return call
     return [caller(snd) for snd in senders], close
+
+
+class _Shared:
+    """One set of extra connections per account and data centre, shared by all transfers."""
+
+    def __init__(self) -> None:
+        self.callers = None
+        self.close = None
+        self.refs = 0
+        self.idle: Optional[asyncio.Future] = None
+        self.lock = asyncio.Lock()
+
+
+def _paused(client) -> bool:
+    return time.time() < client.__dict__.get("_tgc_pool_off", 0)
+
+
+async def acquire(client, dc_id: int):
+    """(callers, release). release(broken=True) after a failure pauses extra connections."""
+    if _paused(client):
+        raise RuntimeError("extra connections paused after Telegram reset them")
+    pools = client.__dict__.setdefault("_tgc_pools", {})
+    p = pools.setdefault(dc_id, _Shared())
+    async with p.lock:
+        if p.idle is not None:
+            p.idle.cancel()
+            p.idle = None
+        if p.callers is None:
+            p.callers, p.close = await open_pool(client, dc_id, CONNECTIONS)
+        p.refs += 1
+        callers = p.callers
+
+    async def close_later():
+        await asyncio.sleep(IDLE_CLOSE)
+        async with p.lock:
+            if p.refs == 0 and p.close is not None:
+                await p.close()
+                p.callers = p.close = None
+
+    async def release(broken: bool = False) -> None:
+        p.refs -= 1
+        if broken:
+            client._tgc_pool_off = time.time() + PAUSE_AFTER_RESET
+            log.warning("Extra connections failed - one connection for the next %s min",
+                        PAUSE_AFTER_RESET // 60)
+            async with p.lock:
+                if p.close is not None:
+                    await p.close()
+                p.callers = p.close = None
+            client.__dict__.get("_tgc_dc_keys", {}).pop(dc_id, None)
+        elif p.refs == 0:
+            p.idle = asyncio.ensure_future(close_later())
+    return callers, release
 
 
 async def _report(progress, done: int, total: int) -> None:
@@ -119,15 +173,15 @@ async def download(client, message, path: str,
         return None
     dc_id, location = utils.get_input_location(doc)
     dc_id = dc_id or client.session.dc_id
-    pool_close = None
+    release = None
     exported = False
     if size >= POOL_SIZE and CONNECTIONS > 1:
         try:
-            callers, pool_close = await open_pool(client, dc_id, CONNECTIONS)
+            callers, release = await acquire(client, dc_id)
             per = PER_CONNECTION
         except Exception as e:
-            log.info("Extra connections not possible (%s) - one connection", e)
-    if pool_close is None:
+            log.info("Extra connections not used (%s) - one connection", e)
+    if release is None:
         exported = dc_id != client.session.dc_id
         sender = await client._borrow_exported_sender(dc_id) if exported else client._sender
         callers, per = [lambda req, s=sender: client._call(s, req)], WORKERS
@@ -153,7 +207,7 @@ async def download(client, message, path: str,
                         res = await call(req)
                         break
                     except (ConnectionError, asyncio.TimeoutError):
-                        if attempt == 4:
+                        if attempt == 4 or release is not None:  # pooled socket gone: fall back now
                             raise
                         await asyncio.sleep(1 + attempt)
                 if not isinstance(res, types.upload.File):
@@ -168,8 +222,9 @@ async def download(client, message, path: str,
         return path
     except Exception as e:
         log.info("Fast download not possible (%s) - using normal download", e)
-        if pool_close is not None:  # a stale export: get a fresh one next time
-            client.__dict__.get("_tgc_dc_keys", {}).pop(dc_id, None)
+        if release is not None:
+            await release(broken=True)
+            release = None
         try:
             os.remove(path)
         except OSError:
@@ -177,8 +232,8 @@ async def download(client, message, path: str,
         return None
     finally:
         os.close(fd)
-        if pool_close is not None:
-            await pool_close()
+        if release is not None:
+            await release()
         elif exported:
             await client._return_exported_sender(sender)
 
@@ -194,14 +249,14 @@ async def upload(client, path: str, progress: Optional[Callable[[int, int], None
     for i in range(parts):
         queue.put_nowait(i)
     done = 0
-    pool_close = None
+    release = None
     callers, per = [client], WORKERS
     if size >= POOL_SIZE and CONNECTIONS > 1 and hasattr(client, "_get_dc"):
         try:
-            callers, pool_close = await open_pool(client, client.session.dc_id, CONNECTIONS)
+            callers, release = await acquire(client, client.session.dc_id)
             per = PER_CONNECTION
         except Exception as e:
-            log.info("Extra upload connections not possible (%s) - one connection", e)
+            log.info("Extra upload connections not used (%s) - one connection", e)
     fd = os.open(path, os.O_RDONLY)
     try:
         async def worker(call):
@@ -219,7 +274,7 @@ async def upload(client, path: str, progress: Optional[Callable[[int, int], None
                             raise RuntimeError(f"part {i} refused")
                         break
                     except (ConnectionError, asyncio.TimeoutError):
-                        if attempt == 4:
+                        if attempt == 4 or release is not None:  # pooled socket gone: fall back now
                             raise
                         await asyncio.sleep(1 + attempt)
                 done += len(data)
@@ -230,8 +285,11 @@ async def upload(client, path: str, progress: Optional[Callable[[int, int], None
         return types.InputFileBig(file_id, parts, os.path.basename(path))
     except Exception as e:
         log.info("Fast upload not possible (%s) - using normal upload", e)
+        if release is not None:
+            await release(broken=True)
+            release = None
         return None
     finally:
         os.close(fd)
-        if pool_close is not None:
-            await pool_close()
+        if release is not None:
+            await release()
