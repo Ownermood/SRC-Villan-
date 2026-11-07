@@ -1183,7 +1183,12 @@ class Hub:
             else:
                 raise ValueError("Tap 📲 Share my number, or type it like +919876543210.")
             phone = "+" + phone.lstrip("+")
-            await event.respond("📨 Sending a login code to your Telegram app…", buttons=Button.clear())
+            try:
+                await msg.delete()  # keep the chat clean (and the number out of it)
+            except Exception:
+                pass
+            wait = await event.respond("📨 Sending a login code to your Telegram app…",
+                                       buttons=Button.clear())  # also removes the share keyboard
             client = self.make_client("")
             await client.connect()
             try:
@@ -1199,8 +1204,13 @@ class Hub:
                 await client.disconnect()
                 await self._drop_login(uid)
                 raise ValueError(f"Telegram asks to wait {e.seconds}s before a new code.")
-            st.update(step="code", client=client, phone=phone, hash=sent.phone_code_hash, digits="")
-            return await self._show(event, ui.code_prompt())
+            st.update(step="code", client=client, phone=phone, hash=sent.phone_code_hash, digits="",
+                      length=getattr(getattr(sent, "type", None), "length", 5) or 5)
+            try:
+                await wait.delete()
+            except Exception:
+                pass
+            return await self._login_show(event, ui.code_prompt())
         if st["step"] == "code":
             code = re.sub(r"\D", "", msg.raw_text or "")
             try:
@@ -1208,7 +1218,7 @@ class Hub:
             except Exception:
                 pass
             if not 5 <= len(code) <= 6:
-                return await self._show(event, ui.code_prompt(
+                return await self._login_show(event, ui.code_prompt(
                     "⚠️ Send the 5-digit code with spaces, like <code>1 2 3 4 5</code>"))
             return await self._try_code(event, code)
         if st["step"] == "password":
@@ -1224,7 +1234,7 @@ class Hub:
                 if st["tries"] >= 3:
                     await self._drop_login(uid)
                     raise ValueError("Wrong password 3 times. Send /login to start again.")
-                return await self._show(event, ui.login_password(
+                return await self._login_show(event, ui.login_password(
                     f"❌ Wrong password ({st['tries']}/3). Try again."))
             return await self.finish_login(event)
 
@@ -1241,30 +1251,64 @@ class Hub:
             return await self.show_welcome(event, edit=True)
         if st["step"] != "code":
             return await event.answer()
+        st["msg"] = await event.get_message()  # keep editing this one message
+        length = st.get("length", 5)
+        if key == "k":
+            st["digits"] = ""
+            await event.answer()
+            return await self._show(event, ui.code_keypad("", length), edit=True)
+        if key.startswith("d") or key == "b":
+            st["digits"] = st.get("digits", "")[:-1] if key == "b" else (st.get("digits", "") + key[1:])[:length]
+            if len(st["digits"]) < length:
+                await event.answer()
+                return await self._show(event, ui.code_keypad(st["digits"], length), edit=True)
+            code, st["digits"] = st["digits"], ""
+            await event.answer("Checking…")
+            return await self._try_code(event, code, keypad=True)
         if key == "r":
             try:
                 sent = await st["client"].send_code_request(st["phone"])
             except FloodWaitError as e:
                 return await event.answer(f"Wait {e.seconds}s for a new code", alert=True)
-            st.update(hash=sent.phone_code_hash)
+            st.update(hash=sent.phone_code_hash, digits="")
             await event.answer("📨 New code sent")
-            return await self._show(event, ui.code_prompt("📨 A new code was sent."), edit=True)
+            return await self._show(event, ui.code_keypad("", st.get("length", 5), "📨 A new code was sent.")
+                                    if st.get("keypad") else ui.code_prompt("📨 A new code was sent."),
+                                    edit=True)
         return await event.answer()
 
-    async def _try_code(self, event, code: str) -> None:
+    async def _login_show(self, event, screen):
+        """Every login step edits ONE message (no pile of prompts in the chat)."""
+        st = self.logins.get(event.sender_id) or {}
+        old = st.get("msg")
+        if old is not None:
+            try:
+                await old.edit(screen[0], buttons=screen[1], parse_mode="html", link_preview=False)
+                return old
+            except Exception as e:
+                if "not modified" in str(e).lower():
+                    return old
+        st["msg"] = await self._show(event, screen)
+        return st["msg"]
+
+    async def _try_code(self, event, code: str, keypad: bool = False) -> None:
         uid = event.sender_id
         st = self.logins[uid]
+        st["keypad"] = keypad
+        length = st.get("length", 5)
         try:
             await st["client"].sign_in(phone=st["phone"], code=code, phone_code_hash=st["hash"])
         except PhoneCodeInvalidError:
-            return await self._show(event, ui.code_prompt("❌ Wrong code, try again."))
+            return await self._login_show(event, ui.code_keypad("", length, "❌ Wrong code, try again.")
+                                          if keypad else ui.code_prompt("❌ Wrong code, try again."))
         except PhoneCodeExpiredError:
-            return await self._show(event, ui.code_prompt(
-                "⌛ This code expired (or Telegram blocked it because it was sent without spaces). "
-                "Tap ↩ New code and send it like <code>1 2 3 4 5</code>."))
+            return await self._login_show(event, ui.code_keypad(
+                "", length, "⌛ That code expired. Tap ↩ New for a fresh one.") if keypad else ui.code_prompt(
+                "⌛ Telegram blocked this code because it was sent in a chat. "
+                "Tap <b>↩ New code</b>, then enter it with <b>🔢 Keypad</b>."))
         except SessionPasswordNeededError:
             st["step"] = "password"
-            return await self._show(event, ui.login_password())
+            return await self._login_show(event, ui.login_password())
         return await self.finish_login(event)
 
     async def finish_login(self, event, edit: bool = False) -> None:
@@ -1278,8 +1322,14 @@ class Hub:
             await self.close_workspace(uid)
         self.acc.remove_botmode(uid)
         app = await self.open_workspace(uid, client)
-        await self._show(event, (f"✅ <b>Logged in as {ui.esc(name)}</b>\nEvery feature is unlocked.",
-                                 None), edit=edit)
+        done = (f"✅ <b>Logged in as {ui.esc(name)}</b>\nEvery feature is unlocked.", None)
+        if st.get("msg") is not None:
+            try:
+                await st["msg"].edit(done[0], buttons=None, parse_mode="html")
+            except Exception:
+                await self._show(event, done)
+        else:
+            await self._show(event, done, edit=edit)
         await self._show(event, await ui.main_menu(app))
 
 

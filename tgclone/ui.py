@@ -557,12 +557,26 @@ def login_phone() -> str:
 def code_prompt(note: str = "") -> Screen:
     """Login step 2: the user types the code (spaces keep Telegram from blocking it)."""
     text = ("<b>🔐 Login · step 2/3</b>\n\nTelegram sent a code to your <b>Telegram app</b>.\n"
-            "Send it here <b>with spaces</b> between the digits:\n\n"
+            "Send it here <b>with spaces</b> between the digits:\n"
             "<blockquote><code>1 2 3 4 5</code></blockquote>\n"
-            "<i>⚠️ Without spaces Telegram may block the code. I delete your message right away.</i>")
+            "<i>🔢 Safest: tap Keypad — the code never goes into the chat, so Telegram can't block it.</i>")
     if note:
         text += f"\n\n{note}"
-    return text, [[B("↩ New code", "otp:r"), B("❌ Cancel", "otp:x", "danger")]]
+    return text, [[B("🔢 Keypad", "otp:k", "success")],
+                  [B("↩ New code", "otp:r"), B("❌ Cancel", "otp:x", "danger")]]
+
+
+def code_keypad(digits: str, length: int = 5, note: str = "") -> Screen:
+    """Login step 2 with buttons: the code is never sent as a message."""
+    shown = " ".join(list(digits) + ["_"] * max(0, length - len(digits)))
+    text = ("<b>🔐 Login · step 2/3</b>\n\nTap the code from your <b>Telegram app</b>:\n"
+            f"<blockquote><code>{shown}</code></blockquote>")
+    if note:
+        text += f"\n{note}"
+    d = [B(str(n), f"otp:d{n}") for n in range(10)]
+    rows = [d[1:4], d[4:7], d[7:10], [B("⌫", "otp:b"), d[0], B("↩ New", "otp:r")],
+            [B("❌ Cancel", "otp:x", "danger")]]
+    return text, rows
 
 
 def login_password(note: str = "") -> Screen:

@@ -177,6 +177,16 @@ class CallbackEvent(events.CallbackQuery.Event):
         self.out.append((text, kw.get("buttons")))
         return Sent()
 
+    async def get_message(self):
+        ev = self
+
+        class _M:
+            edits = ev.edits  # the callback's message: edits land on the event
+
+            async def edit(self, text, **kw):
+                ev.edits.append((text, kw.get("buttons")))
+        return _M()
+
     async def answer(self, message=None, alert=False, **kw):
         self._answered = True
         self.answers.append((message, alert))

@@ -168,21 +168,23 @@ def test_full_login_with_typed_code_and_2fa(hubenv):
     assert "YOUR number" in ev.out[-1][0], "can't log in with someone else's shared contact"
     say(hub, "+91 98765 43005", 5)
     assert hub.logins[5]["step"] == "code"
+    prompt = hub.logins[5]["msg"]  # every login step edits this one message
     ev = say(hub, "1 2 3", 5)
-    assert "with spaces" in ev.out[-1][0] and ev.message.deleted, "too short -> ask again"
+    assert not ev.out and "with spaces" in prompt.edits[-1][0] and ev.message.deleted, "too short"
     ev = say(hub, "1 2 3 4 9", 5)
-    assert "Wrong code" in ev.out[-1][0] and ev.message.deleted, "code message never stays in chat"
+    assert "Wrong code" in prompt.edits[-1][0] and ev.message.deleted, "code never stays in chat"
     ev = press(hub, "otp:r", 5)
     assert "new code" in ev.edits[-1][0].lower()
+    prompt = hub.logins[5]["msg"]  # same message, now reached through the button press
     hubenv.made[-1].twofa = True
     ev = say(hub, "1-2-3-4-5", 5)
-    assert hub.logins[5]["step"] == "password" and "two-step" in ev.out[-1][0]
+    assert hub.logins[5]["step"] == "password" and "two-step" in prompt.edits[-1][0]
     ev = say(hub, "nope", 5)
     assert ev.message.deleted, "password message is deleted"
-    assert "Wrong password (1/3)" in ev.out[-1][0]
+    assert "Wrong password (1/3)" in prompt.edits[-1][0] and not ev.out
     ev = say(hub, "pw", 5)
     assert ev.message.deleted and 5 in hub.ws and 5 not in hub.logins
-    assert any("Logged in as" in t for t in texts(ev))
+    assert "Logged in as" in prompt.edits[-1][0]
     raw = (hubenv.tmp / "accounts.db").read_bytes()
     assert b"SESSION+919876543005" not in raw, "session must be stored encrypted"
     assert hub.acc.sessions() == [(5, "SESSION+919876543005")]
@@ -327,3 +329,20 @@ def test_start_clears_leftover_downloads(hubenv, monkeypatch, tmp_path):
     monkeypatch.setattr(config, "DOWNLOAD_DIR", d)
     hubmod.Hub._clear_downloads()
     assert list(d.iterdir()) == []
+
+
+def test_login_with_keypad_code_never_in_chat(hubenv):
+    hub = hubenv.new_hub()
+    press(hub, "lg", 5)
+    say(hub, "+91 98765 43005", 5)
+    ev = press(hub, "otp:k", 5)
+    assert "_ _ _ _ _" in ev.edits[-1][0]
+    for d in "1234":
+        ev = press(hub, f"otp:d{d}", 5)
+    assert "1 2 3 4 _" in ev.edits[-1][0]
+    ev = press(hub, "otp:b", 5)
+    assert "1 2 3 _ _" in ev.edits[-1][0]
+    press(hub, "otp:d4", 5)
+    ev = press(hub, "otp:d5", 5)  # 5th digit -> signs in by itself
+    assert 5 in hub.ws and 5 not in hub.logins
+    assert "Logged in as" in ev.edits[-1][0]
