@@ -255,9 +255,59 @@ class App:
         return done
 
 
+def _turbo_ok(app: App, msgs: List[Message]) -> bool:
+    """Can these posts be copied server-side in one batch (no download, no re-send)?"""
+    from tgclone import thumbs
+    from tgclone.message import file_type
+    cfg = app.cfg
+    if not cfg.past.turbo or app.sender is not app.reader or app.plugins:
+        return False
+    for m in msgs:
+        if m.noforwards or reply_target(m) or thumbs.needs_reupload(cfg, file_type(m)):
+            return False
+    return True
+
+
+async def _turbo_send(app: App, src: int, dests: List[int], msgs: List[Message]) -> int:
+    """Copy up to 100 posts in ONE request per destination (drop_author = no forward tag).
+
+    Returns how many posts were copied (0 = not possible, caller sends them one by one).
+    """
+    import random as _rnd
+    from telethon.tl import functions
+    from tgclone.message import retry
+    client = app.sender
+    src_peer = await client.get_input_entity(src)
+    src_topic = topic_of(msgs[0])
+    for d in dests:
+        todo = [m for m in msgs if app.store.get_one(src, m.id, d) is None]
+        if not todo:
+            continue
+        topic = await app.topics.dest_topic(src, src_topic, d) if src_topic else None
+        rids = [_rnd.randrange(-2 ** 63, 2 ** 63) for _ in todo]
+        res = await retry(client, functions.messages.ForwardMessagesRequest(
+            from_peer=src_peer, id=[m.id for m in todo], to_peer=await client.get_input_entity(d),
+            random_id=rids, drop_author=not app.cfg.forward_mode, top_msg_id=topic))
+        new_ids = {u.random_id: u.id for u in getattr(res, "updates", []) or []
+                   if isinstance(u, types.UpdateMessageID)}
+        if not new_ids:
+            raise RuntimeError("Telegram returned no copied messages")
+        for m, rid in zip(todo, rids):
+            if rid in new_ids:
+                app.store.add(src, m.id, d, new_ids[rid], media_key(m))
+    return len(msgs)
+
+
 async def run_forward(app: App, fwd: Forward, fresh: bool = False,
                       job: Optional[Job] = None) -> int:
-    """Past mode for one forward: clone history oldest -> newest, resumable."""
+    """Clone history oldest -> newest, resumable, as fast as Telegram allows.
+
+    - turbo: plain posts go 100 per request (server-side copy, nothing downloaded)
+    - protected chats: the next files are downloaded while the current one uploads
+    - order is always kept; FloodWait is handled by waiting, so no fixed delay is needed
+    """
+    from collections import deque
+    from tgclone.message import FILE_TYPES
     if app.reader is not app.user:
         raise RuntimeError("Copying old posts needs a login (👤 My profile → 🔐 Login). "
                            "Without login only new posts are forwarded.")
@@ -270,7 +320,7 @@ async def run_forward(app: App, fwd: Forward, fresh: bool = False,
         app.store.clear(src, dests)
         app.store.set_progress(key, 0)
     start = max(fwd.offset, app.store.get_progress(key))
-    p = app.cfg.past
+    p, cfg = app.cfg.past, app.cfg
     log.info("Cloning %s -> %s from id > %s", src, dests, start)
     try:  # forum group: create all topics first, in the source's order
         made = await app.topics.prepare(src, dests)
@@ -280,28 +330,77 @@ async def run_forward(app: App, fwd: Forward, fresh: bool = False,
         log.warning("Preparing topics failed (messages still go out): %s", e)
 
     count = 0
-    buf: List[Message] = []
+    progress = job.file_progress if job else None
+    turbo: List[Message] = []  # posts waiting for one batch request
+    window: deque = deque()  # (msgs, task) prepared ahead: files downloading in background
 
-    async def flush() -> None:
+    def account(msgs, ok: bool) -> None:
         nonlocal count
-        msgs = list(buf)
-        buf.clear()
-        tms = await app.process(msgs)
-        ok = await app.deliver(src, tms, dests, skip_done=True,
-                               progress=job.file_progress if job else None)
         app.store.set_progress(key, msgs[-1].id)
         count += len(msgs)
         if job:
             job.last_id = msgs[-1].id
-            if tms and dests and ok == 0 and any(
-                    app.store.get_one(src, msgs[0].id, d) is None for d in dests):
-                job.failed += len(msgs)
-            else:
+            if ok:
                 job.done += len(msgs)
+            else:
+                job.failed += len(msgs)
+
+    async def pause() -> None:
         if p.delay:
             await asyncio.sleep(p.delay)
-        if p.batch_size and p.batch_sleep and count % p.batch_size < len(msgs):
+        if p.batch_size and p.batch_sleep and count % p.batch_size < 1:
             await asyncio.sleep(p.batch_sleep)
+
+    async def prepare(msgs):
+        tms = await app.process(msgs)
+        if tms and any(m.noforwards for m in msgs) and cfg.protected_fallback:
+            for tm in tms:  # download now, upload later (overlaps with the previous upload)
+                if tm.file_type in FILE_TYPES:
+                    try:
+                        await tm.download(cfg.max_file_mb, cfg.max_disk_mb, progress)
+                    except Exception as e:
+                        log.debug("prefetch %s: %s", tm.message.id, e)
+        return tms
+
+    async def send_next() -> None:
+        msgs, task = window.popleft()
+        tms = await task
+        ok = await app.deliver(src, tms, dests, skip_done=True, progress=progress)
+        failed = bool(tms) and bool(dests) and ok == 0 and any(
+            app.store.get_one(src, msgs[0].id, d) is None for d in dests)
+        account(msgs, not failed)
+        await pause()
+
+    async def drain() -> None:
+        while window:
+            await send_next()
+
+    async def flush_turbo() -> None:
+        if not turbo:
+            return
+        msgs = list(turbo)
+        turbo.clear()
+        try:
+            await _turbo_send(app, src, dests, msgs)
+            account(msgs, True)
+            await pause()
+        except Exception as e:  # e.g. forwarding restricted: send them one by one instead
+            log.info("Batch copy not possible (%s) - sending one by one", e)
+            for g in _groups(msgs):
+                window.append((g, asyncio.ensure_future(prepare(g))))
+                await send_next()
+
+    async def push(msgs) -> None:
+        if _turbo_ok(app, msgs):
+            await drain()
+            if turbo and (len(turbo) + len(msgs) > 100 or topic_of(turbo[0]) != topic_of(msgs[0])):
+                await flush_turbo()
+            turbo.extend(msgs)
+            return
+        await flush_turbo()
+        window.append((msgs, asyncio.ensure_future(prepare(msgs))))
+        if len(window) > max(0, p.prefetch):
+            await send_next()
 
     if job:
         try:  # range for the progress bar (1 cheap request)
@@ -310,24 +409,53 @@ async def run_forward(app: App, fwd: Forward, fresh: bool = False,
             job.start_id, job.end_id = start, min(fwd.end, top) if fwd.end else top
         except Exception:
             pass
-    async for m in app.reader.iter_messages(src, reverse=True, min_id=start,
-                                            max_id=fwd.end + 1 if fwd.end else 0):
-        if job and job.cancelled:
-            break
-        if isinstance(m.action, types.MessageActionPinMessage) and m.reply_to_msg_id:
-            if buf:
-                await flush()
-            if app.cfg.live.pin_sync:
-                await app.sync_pin(src, [m.reply_to_msg_id], True)  # pins copied in order
-            continue
-        if m.action is not None or (not m.message and not m.media):
-            continue  # service / empty
-        if buf and m.grouped_id != buf[0].grouped_id:
-            await flush()
-        buf.append(m)
-        if not m.grouped_id:
-            await flush()
-    if buf:
-        await flush()
+    buf: List[Message] = []
+    try:
+        async for m in app.reader.iter_messages(src, reverse=True, min_id=start,
+                                                max_id=fwd.end + 1 if fwd.end else 0):
+            if job and job.cancelled:
+                break
+            if isinstance(m.action, types.MessageActionPinMessage) and m.reply_to_msg_id:
+                if buf:
+                    await push(buf)
+                    buf = []
+                await flush_turbo()
+                await drain()
+                if cfg.live.pin_sync:
+                    await app.sync_pin(src, [m.reply_to_msg_id], True)  # pins copied in order
+                continue
+            if m.action is not None or (not m.message and not m.media):
+                continue  # service / empty
+            if buf and m.grouped_id != buf[0].grouped_id:
+                await push(buf)
+                buf = []
+            buf.append(m)
+            if not m.grouped_id:
+                await push(buf)
+                buf = []
+        if buf and not (job and job.cancelled):
+            await push(buf)
+        if not (job and job.cancelled):
+            await flush_turbo()
+            await drain()
+    finally:
+        for _, task in window:  # stopped: don't leave downloads behind
+            task.cancel()
+            try:
+                for tm in await task:
+                    tm.cleanup()
+            except BaseException:
+                pass
     log.info("Done %s -> %s: %s messages", src, dests, count)
     return count
+
+
+def _groups(msgs: List[Message]) -> List[List[Message]]:
+    """Split posts back into albums / single posts."""
+    out: List[List[Message]] = []
+    for m in msgs:
+        if out and m.grouped_id and out[-1][0].grouped_id == m.grouped_id:
+            out[-1].append(m)
+        else:
+            out.append([m])
+    return out

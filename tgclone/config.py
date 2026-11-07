@@ -98,7 +98,9 @@ class LiveSettings(BaseModel):
 
 
 class PastSettings(BaseModel):
-    delay: float = Field(1.0, ge=0, le=300)  # seconds after every message/album
+    delay: float = Field(0, ge=0, le=300)  # extra pause after every post (FloodWait is handled anyway)
+    turbo: bool = True  # plain posts: copy 100 per request server-side (no download)
+    prefetch: int = Field(3, ge=0, le=10)  # protected chats: files downloaded ahead
     batch_size: int = Field(0, ge=0)  # extra pause after N messages (0 = off)
     batch_sleep: float = Field(0, ge=0)
 
@@ -159,6 +161,8 @@ def load_config(path: Path = None, home: Path = None) -> Config:
             cfg.max_file_mb = 0
         if cfg.save.max_batch == 1000:
             cfg.save.max_batch = 0
+        if cfg.past.delay == 1.0:  # old default pause -> none
+            cfg.past.delay = 0
     cfg._home = Path(home) if home else DATA_DIR
     return cfg
 

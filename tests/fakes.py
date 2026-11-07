@@ -196,6 +196,7 @@ def make_app(client=None):
     a.plugins, a.admins, a.from_to, a.titles = [], {1}, {}, {}
     a.caps, a.hub, a.uid, a.home = None, None, 1, Path(DATA_DIR)
     a.paused = a.botmode = False
+    a.cfg.past.turbo = False  # most tests check the post-by-post path; turbo has its own tests
     from tgclone.topics import Topics
     a.topics = Topics(a)
     c = client or Client()

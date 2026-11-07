@@ -144,7 +144,8 @@ def login(hub, uid, phone, twofa=False, env=None):
 
 
 def datas(buttons):
-    return {b.type.data.decode() for row in buttons or [] for b in row if hasattr(b, "type")}
+    return {b.type.data.decode() for row in buttons or [] for b in row
+            if hasattr(b, "type") and hasattr(b.type, "data")}
 
 
 def texts(ev):

@@ -8,7 +8,7 @@ from telethon.errors import DocumentInvalidError
 from telethon.tl import types
 
 from fakes import Client, Msg, make_app
-from tgclone.config import Config, load_config, save_config
+from tgclone.config import Config, Forward, load_config, save_config
 from tgclone.message import CloneMessage, poll_media, send
 
 run = asyncio.run
@@ -326,3 +326,157 @@ def test_admin_emoji_test_reports_truth(hubenv):
     ev = press(hub, "aet", OWNER)
     assert "ENTITY_TEXT_INVALID" in ev.edits[-1][0]
     assert press(hub, "aet", 5).answers[-1] == ("🚫 Owner only", True)
+
+
+class TurboClient:
+    """Fake account that understands batch forwarding (ForwardMessagesRequest)."""
+
+    def __init__(self, restrict=False):
+        from fakes import Client as C
+        self.base = C()
+        self.restrict, self.batches = restrict, []
+
+    def __getattr__(self, name):
+        return getattr(self.base, name)
+
+    async def __call__(self, req):
+        from telethon.errors import ChatForwardsRestrictedError
+        if type(req).__name__ != "ForwardMessagesRequest":
+            return None
+        if self.restrict:
+            raise ChatForwardsRestrictedError(None)
+        self.batches.append(req)
+        ups = []
+        for rid in req.random_id:
+            self.base.n += 1
+            ups.append(types.UpdateMessageID(id=self.base.n, random_id=rid))
+        return _t.SimpleNamespace(updates=ups)
+
+
+def _wire_turbo(a, msgs):
+    c = a.reader
+
+    async def it(src, reverse, min_id, max_id):
+        for m in msgs:
+            if m.id > min_id and (not max_id or m.id < max_id):
+                yield m
+
+    async def gm(chat, ids=None, limit=None):
+        return [msgs[-1]]
+
+    async def resolve(ref):
+        return int(ref)
+    c.base.iter_messages, c.base.get_messages, a.resolve = it, gm, resolve
+
+
+def test_turbo_copies_100_posts_per_request():
+    from tgclone import app as appmod
+    from tgclone.jobs import Job
+    c = TurboClient()
+    a = make_app(c)
+    a.cfg.past.turbo = True
+    msgs = [Msg(i, f"post {i}", chat_id=-1) for i in range(1, 251)]
+    _wire_turbo(a, msgs)
+    job = Job("clone", "t", "k")
+    n = run(appmod.run_forward(a, Forward(source=-1, dest=[7]), job=job))
+    assert n == 250 and job.done == 250
+    assert [len(b.id) for b in c.batches] == [100, 100, 50], "3 requests instead of 250"
+    assert all(b.drop_author for b in c.batches), "copy without 'Forwarded from'"
+    assert a.store.get_one(-1, 250, 7) is not None, "mapped for edit/delete sync"
+    c.batches.clear()
+    run(appmod.run_forward(a, Forward(source=-1, dest=[7])))
+    assert not c.batches, "resume: nothing sent twice"
+
+
+def test_turbo_keeps_order_and_falls_back():
+    from tgclone import app as appmod
+    c = TurboClient()
+    a = make_app(c)
+    a.cfg.past.turbo = True
+    msgs = [Msg(1, "a", chat_id=-1), Msg(2, "b", chat_id=-1), Msg(3, "reply", reply=1, chat_id=-1),
+            Msg(4, "c", chat_id=-1)]
+    _wire_turbo(a, msgs)
+    run(appmod.run_forward(a, Forward(source=-1, dest=[7])))
+    assert [b.id for b in c.batches] == [[1, 2], [4]], "the reply goes alone, order kept"
+    assert [x[2] for x in c.base.calls] == ["reply"]
+    assert c.base.calls[0][4] == a.store.get_one(-1, 1, 7), "reply linked to the copied post"
+    # forwarding restricted -> one by one
+    r = TurboClient(restrict=True)
+    b = make_app(r)
+    b.cfg.past.turbo = True
+    _wire_turbo(b, [Msg(1, "x", chat_id=-1), Msg(2, "y", chat_id=-1)])
+    run(appmod.run_forward(b, Forward(source=-1, dest=[7])))
+    assert [x[2] for x in r.base.calls] == ["x", "y"]
+
+
+def test_protected_chat_prefetches_next_files():
+    from tgclone import app as appmod
+    order = []
+
+    class Slow(Msg):
+        async def download_media(self, file, thumb=None, progress_callback=None):
+            order.append(("down", self.id))
+            await asyncio.sleep(0.01)
+            return await super().download_media(file, thumb, progress_callback)
+    from fakes import Client as C
+
+    class Up(C):
+        async def send_file(self, dest, f, caption=None, **kw):
+            order.append(("up", caption))
+            return await super().send_file(dest, f, caption=caption, **kw)
+    a = make_app(Up())
+    msgs = [Slow(i, f"v{i}", media="M", kind="video", noforwards=True, chat_id=-1) for i in range(1, 6)]
+    c = a.reader
+
+    async def it(src, reverse, min_id, max_id):
+        for m in msgs:
+            yield m
+
+    async def gm(chat, ids=None, limit=None):
+        return [msgs[-1]]
+
+    async def resolve(ref):
+        return int(ref)
+    c.iter_messages, c.get_messages, a.resolve = it, gm, resolve
+    run(appmod.run_forward(a, Forward(source=-1, dest=[7])))
+    ups = [x for x in order if x[0] == "up"]
+    assert [u[1] for u in ups] == ["v1", "v2", "v3", "v4", "v5"], "order kept"
+    first_up = order.index(("up", "v1"))
+    assert sum(1 for x in order[:first_up] if x[0] == "down") >= 3, "next files downloaded ahead"
+
+
+def test_buy_premium_flow(hubenv):
+    from test_hub import OWNER, datas, login, press, say
+    from tgclone import ui
+    hub = hubenv.new_hub()
+    login(hub, OWNER, "+91000000001", env=hubenv)
+    login(hub, 5, "+91000000005", env=hubenv)
+    hub.owner_username = "the_owner"
+    ev = press(hub, "gp", 5)
+    text, rows = ev.edits[-1]
+    assert "Go Premium" in text and "Trial" in text
+    assert {"bp:7", "bp:30", "bp:90"} <= datas(rows)
+    urls = [getattr(b.type, "url", None) for row in rows for b in row]
+    assert "https://t.me/the_owner" in urls
+    ev = press(hub, "bp:30", 5)
+    assert "Request sent" in ev.edits[-1][0] and "₹149" in ev.edits[-1][0]
+    req = [s for s in hub.bot.sent if s[0] == OWNER and "Premium request" in s[1]]
+    assert len(req) == 1 and "apa:5:30" in datas(req[0][2])
+    press(hub, "bp:30", 5)
+    assert len([s for s in hub.bot.sent if s[0] == OWNER and "Premium request" in s[1]]) == 1, "no spam"
+    ev = press(hub, "bp:999", 5)
+    assert ev.answers[-1][1] is True, "unknown plan refused"
+    press(hub, "apa:5:30", OWNER)  # owner taps Grant
+    assert hub.plan_status(5)["kind"] == "premium"
+    # owner edits plans and payment info
+    press(hub, "apP", OWNER)
+    ev = say(hub, "nonsense", OWNER)
+    assert "days=price" in ev.out[-1][0]
+    say(hub, "1=₹10, 365d=₹999", OWNER)
+    assert hub.settings.plans == "1=₹10, 365=₹999"
+    press(hub, "apI", OWNER)
+    say(hub, "UPI: owner@upi", OWNER)
+    hub._buy_asked.clear()
+    ev = press(hub, "bp:365", 5)
+    assert "owner@upi" in ev.edits[-1][0]
+    assert ui.parse_plans("7=₹49, bad, 0=x, 30 = $5") == [(7, "₹49"), (30, "$5")]

@@ -581,11 +581,68 @@ def profile_view(hub, uid: int) -> Screen:
     return "<b>👤 My profile</b>\n\n<blockquote>" + "\n".join(lines) + "</blockquote>", rows
 
 
+def parse_plans(text: str) -> list:
+    """'7=₹49, 30=₹149' -> [(7, '₹49'), (30, '₹149')] (bad parts are skipped)."""
+    out = []
+    for part in (text or "").replace("\n", ",").split(","):
+        if "=" not in part:
+            continue
+        days, price = part.split("=", 1)
+        days = days.strip().lower().rstrip("d").strip()
+        if days.isdigit() and 0 < int(days) <= 3650 and price.strip():
+            out.append((int(days), price.strip()[:20]))
+    return out
+
+
+PLAN_ICONS = ["⭐", "💎", "🏅", "👑"]
+
+
 def get_premium(hub, uid: int) -> Screen:
-    owner = f'<a href="tg://user?id={hub.owner}">the owner</a>' if hub.owner else "the owner"
-    return (f"<b>💎 Get premium</b>\n\nMessage {owner} with your id <code>{uid}</code> "
-            "and the number of days you want. You'll get a message here as soon as it's active.",
-            [[B("👤 My profile", "ac"), B("« Back", "m")]])
+    st = hub.plan_status(uid)
+    plans = parse_plans(hub.settings.plans)
+    current = plan_label(st)
+    text = ("<b>💎 Go Premium</b> · <i>unlock everything</i>\n\n<blockquote>"
+            "✅ Clone any channel or group — full history\n"
+            "✅ Groups with topics, topic by topic\n"
+            "✅ Protected chats (download + re-upload)\n"
+            "✅ Live auto-forward, edits, pins, polls\n"
+            "✅ Save restricted posts from links\n"
+            "✅ Thumbnail · watermark · filters · OCR\n"
+            "⚡ Fast parallel downloads & turbo copy</blockquote>\n"
+            f"💎 <b>Your plan:</b> {current}\n\n")
+    rows = []
+    if plans:
+        text += "👇 <b>Choose a plan</b> — the owner gets your request instantly:"
+        best = max(range(len(plans)), key=lambda i: plans[i][0])
+        for i, (days, price) in enumerate(plans):
+            tag = " · 🔥 popular" if i == min(1, len(plans) - 1) and len(plans) > 1 else ""
+            tag = " · 🏅 best value" if i == best and len(plans) > 2 else tag
+            rows.append([B(f"{PLAN_ICONS[min(i, 3)]} {days} days · {price}{tag}", f"bp:{days}",
+                           "success" if tag else "primary")])
+    else:
+        text += "Message the owner with your id below to get premium."
+    text += f"\n\n🔑 Your id: <code>{uid}</code>"
+    contact = getattr(hub, "owner_username", "")
+    if contact:
+        rows.append([Button.url("💬 Message the owner", f"https://t.me/{contact}")])
+    rows.append([B("👤 My profile", "ac"), B("« Back", "m")])
+    return text, rows
+
+
+def premium_requested(hub, uid: int, days: int, price: str) -> Screen:
+    pay = hub.settings.pay_info.strip()
+    text = (f"<b>📬 Request sent!</b>\n\n<blockquote>💎 <b>{days} days</b> · {esc(price)}\n"
+            f"🔑 Your id: <code>{uid}</code></blockquote>\n")
+    text += (f"💳 <b>How to pay</b>\n<blockquote>{esc(pay)}</blockquote>\n"
+             "After paying, send the screenshot to the owner. " if pay else
+             "The owner will contact you about payment. ")
+    text += "You'll get a message here the moment premium is active. 🎉"
+    rows = []
+    contact = getattr(hub, "owner_username", "")
+    if contact:
+        rows.append([Button.url("💬 Message the owner", f"https://t.me/{contact}")])
+    rows.append([B("« Back", "gp")])
+    return text, rows
 
 
 def plan_expired(hub, uid: int) -> Screen:
@@ -725,9 +782,12 @@ def admin_premium(hub) -> Screen:
             f"⚙️ <b>Plans</b> · {'✅ on — users need trial or premium' if st.premium_enabled else '❌ off — everyone free'}\n"
             f"🎁 <b>Free trial</b> · {st.trial_hours}h for every new user\n"
             f"⭐ {prem} premium · 🎁 {trial} on trial · ⌛ {expired} expired</blockquote>\n"
+            f"💰 <b>Plans</b> · {esc(st.plans) or '— none'}\n"
+            f"💳 <b>Payment info</b> · {esc(st.pay_info) or '— not set'}\n\n"
             "<i>➕ Give premium: send <code>user_id days</code> or <code>@username days</code>.</i>",
             [[B("➕ Give premium", "apg", "success"), B("➖ Remove premium", "apr", "danger")],
              [B("📋 Premium users", "apl:0")],
+             [B("💰 Plans & prices", "apP"), B("💳 Payment info", "apI")],
              [B("➖", "atr:-"), B(f"🎁 Trial {st.trial_hours}h", "noop"), B("➕", "atr:+")],
              [B(("✅" if st.premium_enabled else "❌") + " Plans " + ("on" if st.premium_enabled else "off"),
                 "apt", "success" if st.premium_enabled else None)],
@@ -755,10 +815,15 @@ def admin_premium_list(hub, page: int = 0) -> Screen:
 
 @admin_screen
 def admin_prompt(kind: str) -> Screen:
-    back = {"premium": "apm", "rmpremium": "apm", "block": "abl", "photo": "asp"}[kind]
+    back = {"premium": "apm", "rmpremium": "apm", "block": "abl", "photo": "asp",
+            "plans": "apm", "pay": "apm"}[kind]
     texts = {
         "premium": "<b>➕ Give premium</b>\n\nSend <code>user_id days</code> or <code>@username days</code>.\n"
                    "Example: <code>5021 30</code>\n<i>Days are added on top of time left.</i>",
+        "plans": "<b>💰 Plans & prices</b>\n\nSend <code>days=price</code> separated by commas.\n"
+                 "Example: <code>7=₹49, 30=₹149, 90=₹349</code>\nSend <code>-</code> to hide the plans.",
+        "pay": "<b>💳 Payment info</b>\n\nWhat users see after choosing a plan — UPI id, payment "
+               "link, bank details…\nExample: <code>UPI: yourname@upi</code>\nSend <code>-</code> to clear.",
         "rmpremium": "<b>➖ Remove premium</b>\n\nSend the <code>user_id</code> or <code>@username</code>.",
         "block": "<b>🚫 Block a chat</b>\n\nSend any of these — users won't be able to clone it:\n<blockquote>"
                  "📁 folder link <code>t.me/addlist/…</code> (blocks every chat in it)\n"

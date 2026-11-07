@@ -39,12 +39,12 @@ PANEL_CMDS = ["start", "menu", "help", "list", "add", "forward", "remove", "togg
 HUB_CMDS = ["login", "logout", "account", "profile", "admin", "addpremium", "rmpremium",
             "block", "unblock"]
 OWNER_CMDS = {"admin", "addpremium", "rmpremium", "block", "unblock"}
-HUB_CALLBACKS = {"lg", "hw", "otp", "ac", "lo", "LO", "LD", "bm", "bx", "gp",
+HUB_CALLBACKS = {"lg", "hw", "otp", "ac", "lo", "LO", "LD", "bm", "bx", "gp", "bp", "prd", "apP", "apI",
                  "ad", "adm", "adu", "adv", "adb", "adl", "adp", "adj", "adx", "adt", "ap", "dn",
                  "apm", "apg", "apr", "apl", "atr", "apt", "apa", "apx", "abl", "abk", "aub",
                  "aac", "alm", "asp", "aps", "apd", "aem", "aet"}
 # reachable while a plan is expired (profile, logout, help, get premium)
-EXPIRED_OK = {"ac", "lo", "LO", "LD", "gp", "hw", "bx", "otp", "lg", "noop"}
+EXPIRED_OK = {"ac", "lo", "LO", "LD", "gp", "bp", "hw", "bx", "otp", "lg", "noop"}
 BOT_COMMANDS = {"start": "Open the control panel", "profile": "Plan, account, logout",
                 "login": "Log in with Telegram", "batch": "Save posts: link count",
                 "jobs": "Running jobs", "stop": "Stop job(s)", "thumb": "Thumbnail",
@@ -77,6 +77,8 @@ class Hub:
         self.admin_wait: Optional[dict] = None  # owner is typing a value for an admin tool
         self._bot_handlers: Dict[int, list] = {}  # bot-only users' live handlers on the shared bot
         self._start_media = None  # cached uploaded start photo
+        self.owner_username = ""  # for the "Message the owner" button
+        self._buy_asked: Dict[int, float] = {}  # user -> last premium request (anti-spam)
         self._tasks = []
 
     # ============================================================ startup
@@ -108,6 +110,11 @@ class Hub:
                 log.error("SESSION_STRING in .env is not valid any more")
         if not self.owner:
             log.warning("OWNER_ID not set - nobody can open the admin panel")
+        else:
+            try:
+                self.owner_username = getattr(await self.bot.get_entity(self.owner), "username", "") or ""
+            except Exception:
+                pass
 
         for uid, session in self.acc.sessions():
             if uid not in self.ws:
@@ -691,6 +698,18 @@ class Hub:
             await self._notify(uid, "➖ Your premium was removed by the owner.")
             return await self._show(event, ui.admin_screen((f"➖ Premium removed for <code>{uid}</code>.",
                                              [[ui.B("« Premium", "apm")]])))
+        if kind in ("plans", "pay"):
+            text = (msg.raw_text or "").strip()
+            clear = text == "-"
+            if kind == "plans":
+                if not clear and not ui.parse_plans(text):
+                    raise ValueError("Use days=price, e.g. 7=₹49, 30=₹149")
+                self.settings.plans = "" if clear else ", ".join(f"{d}={p}" for d, p in ui.parse_plans(text))
+            else:
+                self.settings.pay_info = "" if clear else text[:500]
+            self.acc.save_settings(self.settings)
+            self.admin_wait = None
+            return await self._show(event, ui.admin_premium(self))
         if kind == "block":
             await self._block_from(event, msg)
             self.admin_wait = None
@@ -734,6 +753,8 @@ class Hub:
             return await self._show(event, ui.profile_view(self, uid), edit=True)
         if k == "gp":
             return await self._show(event, ui.get_premium(self, uid), edit=True)
+        if k == "bp":
+            return await self.buy_request(event, int(parts[1]))
         if k == "lo":
             return await self._show(event, ui.confirm(
                 "Log out? I stop forwarding for you and my session on your Telegram ends.",
@@ -812,6 +833,15 @@ class Hub:
             st.trial_hours = steps[max(0, min(len(steps) - 1, i + (1 if parts[1] == "+" else -1)))]
             save()
             return await show(ui.admin_premium(self))
+        if k in ("apP", "apI"):
+            self.admin_wait = {"kind": "plans" if k == "apP" else "pay"}
+            return await show(ui.admin_prompt(self.admin_wait["kind"]))
+        if k == "prd":
+            target = int(parts[1])
+            await self._notify(target, "❌ Your premium request was declined. Message the owner "
+                                       "if you think this is a mistake.")
+            await event.answer("Declined")
+            return await show(ui.admin_user(self, target))
         if k in ("apg", "apr"):
             self.admin_wait = {"kind": "premium" if k == "apg" else "rmpremium"}
             return await show(ui.admin_prompt(self.admin_wait["kind"]))
@@ -881,6 +911,33 @@ class Hub:
                 await self._notify(target, "❌ Your access request was declined.")
             await event.answer("Approved" if k == "ap" else "Declined")
             return await show(ui.admin_pending(self))
+
+    async def buy_request(self, event, days: int) -> None:
+        """User picked a plan: owner gets a one-tap Grant button."""
+        uid = event.sender_id
+        plans = dict(ui.parse_plans(self.settings.plans))
+        if days not in plans:
+            return await event.answer("This plan is not available any more", alert=True)
+        now = time.time()
+        if now - self._buy_asked.get(uid, 0) < 600:
+            await event.answer("Request already sent — the owner will reply soon", alert=True)
+            return await self._show(event, ui.premium_requested(self, uid, days, plans[days]), edit=True)
+        self._buy_asked[uid] = now
+        sender = await event.get_sender()
+        name = " ".join(filter(None, [getattr(sender, "first_name", ""), getattr(sender, "last_name", "")])) \
+            or self.acc.name_of(uid) or str(uid)
+        uname = getattr(sender, "username", None)
+        if not self.acc.name_of(uid):
+            self.acc.set_access(uid, self.acc.access(uid) or "seen", name)
+        await self._notify(self.owner, (
+            f"💎 <b>Premium request</b>\n<blockquote>👤 {ui.esc(name)}"
+            f"{' · @' + uname if uname else ''}\n🔑 <code>{uid}</code>\n"
+            f"💰 <b>{days} days</b> · {ui.esc(plans[days])}\n"
+            f"💎 now: {ui.plan_label(self.plan_status(uid))}</blockquote>"),
+            ui.admin_screen(("", [[ui.B(f"✅ Grant {days} days", f"apa:{uid}:{days}", "success")],
+                                  [ui.B("❌ Decline", f"prd:{uid}", "danger"),
+                                   ui.B("👤 Open user", f"adv:{uid}")]]))[1])
+        await self._show(event, ui.premium_requested(self, uid, days, plans[days]), edit=True)
 
     async def emoji_test(self, uid: int):
         """Send a raw premium-emoji message and report exactly what Telegram did."""

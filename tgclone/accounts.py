@@ -24,6 +24,8 @@ class HubSettings(BaseModel):
     trial_hours: int = Field(24, ge=0, le=24 * 30)  # free trial for every new user (0 = none)
     start_photo: str = ""  # path or https URL shown on top of /start
     premium_emoji: bool = True  # animated custom emoji in texts and buttons
+    plans: str = "7=₹49, 30=₹149, 90=₹349"  # days=price shown on the Get premium screen
+    pay_info: str = ""  # how to pay (UPI id, link...) shown after a plan is chosen
 
 
 def load_key(secret_key: str, key_file: Path) -> bytes:
