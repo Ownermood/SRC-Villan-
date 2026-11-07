@@ -78,6 +78,22 @@ DEFAULT_START = ("<blockquote>🤝 Welcome: <b>{name}</b> to <b>{bot}</b> — cl
                  "on Telegram</blockquote>\n<blockquote>💡 Tap ❔ Help to learn every feature.</blockquote>")
 
 
+_QUOTE_TAG = re.compile(r"(<blockquote[^>]*>|</blockquote>)")
+
+
+def bold_blocks(text: str) -> str:
+    """Bold every text run, opening <b> again inside each quote (never one <b> around a quote)."""
+    out = []
+    for part in _QUOTE_TAG.split(text):
+        if not part or _QUOTE_TAG.fullmatch(part) or not part.strip():
+            out.append(part)
+            continue
+        lead = part[:len(part) - len(part.lstrip("\n"))]
+        trail = part[len(part.rstrip("\n")):]
+        out.append(f"{lead}<b>{part.strip(chr(10))}</b>{trail}")
+    return "".join(out)
+
+
 async def main_menu(app: App, intro: str = "") -> Screen:
     run = app.jobs.running()
     dests = {d for v in app.from_to.values() for d in v}
@@ -90,19 +106,19 @@ async def main_menu(app: App, intro: str = "") -> Screen:
         f"🧩 Plugins · {esc(plugins)}",
     ]
     name = esc(getattr(hub, "bot_name", "") or "SRC Villan Bot")
-    # whole screen bold; one blank line between sections; t.me in code so it is not a link
-    parts = [f"⚡ {name} • TG Clone"]
+    # bold inside each block (Telegram drops a bold that wraps quotes); t.me in code, not a link
+    text = f"⚡ {name} • TG Clone"
     if intro:
-        parts.append(re.sub(r"</?b>", "", intro).strip())
-    parts.append("📊 Status\n<blockquote>" + "\n".join(status) + "</blockquote>")
+        text += "\n" + re.sub(r"</?b>", "", intro).strip()
+    text += "\n\n📊 Status\n<blockquote>" + "\n".join(status) + "</blockquote>"
     if hub is not None:
         mode = ("🤖 Mode · without login (new posts only)" if app.botmode
                 else "🔐 Mode · Logged in (all features unlocked)")
-        parts.append(f"👤 Account\n<blockquote>💎 Plan · {plan_label(hub.plan_status(app.uid))}\n"
-                     f"{mode}</blockquote>")
-    parts.append("<i>💡 Add me as admin in your chats, then ➕ New forward.</i>" if app.botmode
-                 else "<i>💡 Send any post link (<code>t.me/…</code>) to save it.</i>")
-    text = "<b>" + "\n\n".join(parts) + "</b>"
+        text += (f"\n\n👤 Account\n<blockquote>💎 Plan · {plan_label(hub.plan_status(app.uid))}\n"
+                 f"{mode}</blockquote>")
+    text += "\n" + ("<i>💡 Add me as admin in your chats, then ➕ New forward.</i>" if app.botmode
+                    else "<i>💡 Send any post link (<code>t.me/…</code>) to save it.</i>")
+    text = bold_blocks(text)
     buttons = [
         [B("🔁 Clone Channel/Group", "cl", "success")],
         [B("📡 Forwards", "fl:0", "primary"), B("➕ New forward", "na", "primary")],
