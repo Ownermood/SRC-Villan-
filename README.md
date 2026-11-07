@@ -23,7 +23,7 @@ Update: `git pull && .venv/bin/pip install -r requirements.txt -q`, then restart
 
 ## For users (everything in Telegram)
 
-1. `/start` → **🔐 Login with Telegram** → 📲 share your number → send the code **with spaces** (`1 2 3 4 5`) → 2FA password if you have one (deleted at once).
+1. `/start` → **🔐 Login with Telegram** → 📲 share your number → tap the code on the **keypad** (never type it: Telegram blocks a code sent in a chat) → 2FA password if you have one (deleted at once).
 2. **🔁 Clone Channel/Group** → send the source (forward a message from it, or `@username` / `-100id` / link) → send the destination → the clone starts.
 3. **➕ New forward** does the same for live auto-forwarding of new posts.
 4. Send any post link (`t.me/c/123/45`, or a range `t.me/chan/10-50`) to save it.

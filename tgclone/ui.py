@@ -539,7 +539,7 @@ def welcome(trial_hours: int = 24, owner_only: bool = False, pending: bool = Fal
 
 HOW = """<b>❔ How it works</b>
 
-🔑 <b>Login</b> — 🔐 Login → 📲 share your number → send the code like <code>1 2 3 4 5</code>.
+🔑 <b>Login</b> — 🔐 Login → 📲 share your number → tap the code on the keypad.
 📡 <b>Forward</b> — ➕ New forward → forward a message from the source → then from your channel → ✅ Done.
 ✅ <b>Relax</b> — new posts are copied automatically. 🔁 Clone history copies old posts too.
 
@@ -554,23 +554,13 @@ def login_phone() -> str:
             "<i>Send /cancel to stop.</i>")
 
 
-def code_prompt(note: str = "") -> Screen:
-    """Login step 2: the user types the code (spaces keep Telegram from blocking it)."""
-    text = ("<b>🔐 Login · step 2/3</b>\n\nTelegram sent a code to your <b>Telegram app</b>.\n"
-            "Send it here <b>with spaces</b> between the digits:\n"
-            "<blockquote><code>1 2 3 4 5</code></blockquote>\n"
-            "<i>🔢 Safest: tap Keypad — the code never goes into the chat, so Telegram can't block it.</i>")
-    if note:
-        text += f"\n\n{note}"
-    return text, [[B("🔢 Keypad", "otp:k", "success")],
-                  [B("↩ New code", "otp:r"), B("❌ Cancel", "otp:x", "danger")]]
-
-
 def code_keypad(digits: str, length: int = 5, note: str = "") -> Screen:
     """Login step 2 with buttons: the code is never sent as a message."""
     shown = " ".join(list(digits) + ["_"] * max(0, length - len(digits)))
-    text = ("<b>🔐 Login · step 2/3</b>\n\nTap the code from your <b>Telegram app</b>:\n"
-            f"<blockquote><code>{shown}</code></blockquote>")
+    text = ("<b>🔐 Login · step 2/3</b>\n\nTelegram sent a code to your <b>Telegram app</b>.\n"
+            "Tap it on the buttons below:\n"
+            f"<blockquote><code>{shown}</code></blockquote>\n"
+            "<i>⚠️ Never type or forward the code — Telegram blocks a code that was sent in a chat.</i>")
     if note:
         text += f"\n{note}"
     d = [B(str(n), f"otp:d{n}") for n in range(10)]

@@ -67,7 +67,7 @@ Apne bot ko `/start` bhejo → 🔐 **Login with Telegram**. Owner hone ki wajah
 
 1. Bot kholo → `/start` → **🔐 Login with Telegram**
 2. **📱 Share my number** button dabao
-3. Telegram app mein aaya code **spaces ke saath** bhejo, jaise `1 2 3 4 5`
+3. Telegram app mein aaya code bot ke **keypad buttons** se tap karo (code type mat karo — chat me bheja code Telegram block kar deta hai)
    (bina space ke Telegram code block kar sakta hai; bot aapka message turant delete kar deta hai)
 4. 2-step password ho to bhejo — bot use turant delete kar deta hai
 5. ✅ Logged in → **➕ New forward** → source channel ka koi message forward karo → destination ka message forward karo → ✅ Done
