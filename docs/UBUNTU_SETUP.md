@@ -46,12 +46,12 @@ journalctl -u tgclone -f           # live logs
 
 **WSL / bina systemd:**
 ```bash
-sudo apt install -y tmux
-tmux new -s tgclone 'bash scripts/run.sh'
+cd ~/SRC-Villan- && bash scripts/run.sh
 ```
 `scripts/run.sh` crash hone par 10 second mein khud restart karta hai aur band hone ki wajah dikhata hai.
 Restart ke baad adhoore clone / save **khud wahin se aage chalte hain**.
-Bahar nikalna: `Ctrl+B` phir `D`. Wapas aana: `tmux attach -t tgclone`.
+Band karna: `Ctrl+C`. Window band ki to bot bhi band — minimize karo.
+Window band karke chalana ho: `nohup bash scripts/run.sh > /dev/null 2>&1 &` (logs: `tail -f data/tgclone.log`).
 
 > WSL par systemd on karna ho: `printf '[boot]\nsystemd=true\n' | sudo tee /etc/wsl.conf`,
 > phir Windows PowerShell mein `wsl --shutdown`, Ubuntu dobara kholo, aur `bash scripts/install_ubuntu.sh --service`.
@@ -115,7 +115,7 @@ Commands (sirf owner): `/admin` · `/addpremium 5021 30` · `/rmpremium 5021` ·
 cd ~/SRC-Villan-
 git pull
 .venv/bin/pip install -r requirements.txt -q
-sudo systemctl restart tgclone        # ya: tmux kill-session -t tgclone; tmux new -s tgclone 'bash scripts/run.sh'
+sudo systemctl restart tgclone        # WSL: chal rahe bot me Ctrl+C, phir: bash scripts/run.sh
 ```
 
 ## Backup
@@ -130,7 +130,10 @@ SECRET_KEY kho gaya to saved logins nahi khulenge — users ko dobara login karn
 | Dikkat | Fix |
 |---|---|
 | `API_ID / API_HASH missing` / `BOT_TOKEN missing` | `.venv/bin/python -m tgclone setup` |
-| Bot jawab nahi deta | `journalctl -u tgclone -f` (ya tmux window) dekho; token sahi hai? |
+| Bot jawab nahi deta | `journalctl -u tgclone -f` (WSL: `tail -f data/tgclone.log`) dekho; token sahi hai? |
+| User: "code expired" / "previously shared" | Code type mat karo — 🔢 keypad se tap karo, ↩ New se naya code |
+| "SESSION_STRING ... not valid" | `.env` me `SESSION_STRING=` khaali karo, bot me `/login` |
+| "Download folder full" | Restart karo — bachi hui temp files start par khud delete hoti hain |
 | User: "code expired / wrong" | Keypad par 🔄 New code. Code sirf buttons se daalo |
 | User: "Wait Ns before a new code" | Telegram ki limit — utna wait karo |
 | "Your login was ended from Telegram" | User ne Devices se session hataya — /login dobara |

@@ -4,9 +4,8 @@ A Telegram cloner bot built on Telethon. Users work **inside Telegram only**: th
 
 It was built by merging **tgcf**, **Telethon-Channel-Clone**, **clonechat** and **Save-Restricted-Content-Bot v2/v3** into one codebase. Left out on purpose: payment / redeem code, ad shortener, `/eval` (remote code execution), speedtest, broadcast, yt-dlp, MongoDB, Dropbox-hosted pyrogram forks and other unverifiable dependencies, and obfuscated promo strings.
 
-![User screens: menu, clone, job card, premium, profile, login](docs/screenshots/tgclone_screens_1.png)
-![Owner screens: admin panel, premium, user, settings, thumbnail, plugins](docs/screenshots/tgclone_screens_2.png)
-![Start screen, colours, limits, start text](docs/screenshots/tgclone_screens_3.png)
+![User screens: welcome, keypad login, menu, profile, premium, settings](docs/screenshots/tgclone_screens_1.png)
+![Owner screens: admin panel, live bot stats, blocked chats and folders, premium users, start text](docs/screenshots/tgclone_screens_2.png)
 
 ## Quick start (owner, once)
 
@@ -16,14 +15,15 @@ Full Hinglish guide with troubleshooting: **[docs/UBUNTU_SETUP.md](docs/UBUNTU_S
 git clone -b ccr-1f6db1cf-flau3n https://github.com/Ownermood/SRC-Villan-.git && cd SRC-Villan-
 bash scripts/install_ubuntu.sh --service   # python, ffmpeg, tesseract, .venv (+ systemd if available)
 .venv/bin/python -m tgclone setup          # asks API_ID, API_HASH, BOT_TOKEN, OWNER_ID -> .env
-tmux new -s tgclone 'bash scripts/run.sh'  # or: sudo systemctl start tgclone
+sudo systemctl start tgclone               # VPS (24x7)  ·  WSL / no systemd: bash scripts/run.sh
 ```
 Then open the bot and send `/start`. `scripts/run.sh` restarts the bot after a crash and prints why it stopped.
 Update: `git pull && .venv/bin/pip install -r requirements.txt -q`, then restart. Running jobs continue by themselves.
+Moving to a VPS: copy `.env` and `data/` (without `data/downloads/`), and never run the bot in two places at once.
 
 ## For users (everything in Telegram)
 
-1. `/start` → **🔐 Login with Telegram** → 📲 share your number → tap the code on the **keypad** (never type it: Telegram blocks a code sent in a chat) → 2FA password if you have one (deleted at once).
+1. `/start` → **🔐 Login with Telegram** → 📲 share your number → tap the code on the **🔢 keypad** (never type it: Telegram blocks a code sent in a chat) → 2FA password if you have one (deleted at once).
 2. **🔁 Clone Channel/Group** → send the source (forward a message from it, or `@username` / `-100id` / link) → send the destination → the clone starts.
 3. **➕ New forward** does the same for live auto-forwarding of new posts.
 4. Send any post link (`t.me/c/123/45`, or a range `t.me/chan/10-50`) to save it.
@@ -35,7 +35,7 @@ Update: `git pull && .venv/bin/pip install -r requirements.txt -q`, then restart
 **Cloning & speed**
 - Full history, oldest first, albums kept together, replies linked, pins copied (the "pinned a message" notice is deleted at once), polls and quizzes copied.
 - **Turbo copy**: plain posts are copied server-side, **100 per request**, with no download and no "Forwarded from" tag.
-- **Protected chats**: each file is downloaded and re-uploaded, keeping its thumbnail, name and duration. Big files (10 MB and up) use **4 connections × 4 parts in flight** (512 KB parts). The next files download while the current one uploads, and several destinations are sent at the same time (the file is downloaded once).
+- **Protected chats**: each file is downloaded and re-uploaded, keeping its thumbnail, name and duration. Files move in 512 KB parts with 8 parts in flight; big files (10 MB and up) try **4 extra connections**. If Telegram cuts them on your network, the same file finishes on one connection and extra connections pause (10 min → 7 days, remembered across restarts). The next files download while the current one uploads, and several destinations are sent at the same time (the file is downloaded once). Leftover temp files are cleared at every start.
 - **Fast restart**: the bot answers at once, users load in parallel, the chats a user works with are remembered (no full dialog download), and pending jobs resume within a second.
 - No fixed pause between posts. If Telegram asks to wait (FloodWait), the bot waits and continues.
 - **Resumable**: progress is stored. A stopped, crashed or restarted clone continues by itself, and nothing is sent twice.
@@ -49,9 +49,10 @@ Update: `git pull && .venv/bin/pip install -r requirements.txt -q`, then restart
 **Plans & admin (owner only, red 🛡 Admin panel button)**
 - Every new user gets a free trial (default 24h). **💎 Go Premium** shows the plans and prices you set (`7=₹49, 30=₹149, …`). A tap sends you a request with a one-tap **✅ Grant** button, and the user sees your payment info.
 - Users: approve / ban / force logout, add 1/7/30 days, remove premium. You can also use `/addpremium <id|@user> <days>` and `/rmpremium <id>`.
-- 🚫 Blocked chats: block by folder link `t.me/addlist/…`, `@username`, `t.me/c/…`, invite `t.me/+…` (only once you have joined it), `-100…` id or a forwarded message.
+- 📊 **Bot stats · live**: users, plans, jobs and transfer speed right now, totals since start, CPU / RAM / disk. Refreshes itself every 5 s for 2 min.
+- 🚫 Blocked chats: block by folder link `t.me/addlist/…`, `@username`, `t.me/c/…`, invite `t.me/+…` (only once you have joined it), `-100…` id or a forwarded message. A folder shows as one button with its name; inside are its chats and a red **Remove whole folder**. The owner is never blocked.
 - Access mode (open / approval / only me). Jobs at once: free trial 1 and premium 3 (e.g. a channel, a group and a topics group together), both adjustable.
-- Start screen: start photo plus your own ✏️ start text (`{name}` `{bot}` `{plan}` `{id}`; your bold, quotes and premium emoji are kept). Also ⭐ premium emoji and 🔍 premium emoji self-test.
+- Start screen: start photo plus your own ✏️ start text, which becomes the whole welcome message (`{name}` `{bot}` `{plan}` `{id}`; bold, quotes and premium emoji kept; up to 3500 characters, a long text goes under the photo). Also ⭐ premium emoji and 🔍 premium emoji self-test.
 
 **Every Telegram style is copied**: quote and expandable quote, bold, italic, underline, strike, spoiler, code, pre, links, mentions and premium emoji, even after caption / replace / style plugins change the text.
 

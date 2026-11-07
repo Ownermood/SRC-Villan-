@@ -516,9 +516,24 @@ def plan_label(st: dict) -> str:
 
 # ------------------------------------------------------------------ user side
 def welcome(trial_hours: int = 24, owner_only: bool = False, pending: bool = False,
-            intro: str = "") -> Screen:
-    text = (
-        "<b>⚡ tgclone</b> · <i>Telegram cloner bot</i>\n\n" + (f"{intro}\n\n" if intro else "") + "<blockquote>"
+            intro: str = "", custom: bool = False, bot_name: str = "") -> Screen:
+    """/start for new users. custom=True: the owner's own start text is the whole message."""
+    if custom and intro:
+        text = intro
+    else:
+        text = _default_welcome(trial_hours, intro, bot_name)
+    if owner_only:
+        return text + "\n\n🔒 This bot is private.", None
+    if pending:
+        return text + "\n\n⏳ Your access request is waiting for the owner.", None
+    return text, [[B("🔐 Login with Telegram", "lg", "success")],
+                  [B("🤖 Use without login", "bm"), B("❔ How it works", "hw")]]
+
+
+def _default_welcome(trial_hours: int, intro: str, bot_name: str) -> str:
+    return (
+        f"<b>⚡ {esc(bot_name or 'SRC Villan Bot')}</b> · <i>TG Clone</i>\n\n"
+        + (f"{intro}\n\n" if intro else "") + "<blockquote>"
         "📡 Auto-forward channels & groups in real time\n"
         "🔁 Copy a full history — even protected chats\n"
         "🗂 Groups with topics cloned topic by topic\n"
@@ -529,12 +544,6 @@ def welcome(trial_hours: int = 24, owner_only: bool = False, pending: bool = Fal
         "🤖 <b>Without login</b> — new posts only; I must be admin in your chats.\n"
         "<i>Logins are stored encrypted. Log out anytime (Telegram → Settings → Devices too).</i>"
     )
-    if owner_only:
-        return text + "\n\n🔒 This bot is private.", None
-    if pending:
-        return text + "\n\n⏳ Your access request is waiting for the owner.", None
-    return text, [[B("🔐 Login with Telegram", "lg", "success")],
-                  [B("🤖 Use without login", "bm"), B("❔ How it works", "hw")]]
 
 
 HOW = """<b>❔ How it works</b>
@@ -946,7 +955,8 @@ def admin_prompt(kind: str) -> Screen:
         "premium": "<b>➕ Give premium</b>\n\nSend <code>user_id days</code> or <code>@username days</code>.\n"
                    "Example: <code>5021 30</code>\n<i>Days are added on top of time left.</i>",
         "start": "<b>✏️ Start text</b>\n\nSend the message users see on /start (under the start photo). "
-                 "Bold, quotes, premium emoji — your formatting is kept.\n<blockquote>"
+                 "Bold, quotes, premium emoji — your formatting is kept. It becomes the <b>whole</b> "
+                 "welcome message for new users (max 3500 characters).\n<blockquote>"
                  "<code>{name}</code> user's name · <code>{bot}</code> bot name · "
                  "<code>{plan}</code> their plan · <code>{id}</code> their id</blockquote>\n"
                  "Example: <code>🤝 Welcome {name} to {bot}!</code>\nSend <code>-</code> for the default.",

@@ -554,6 +554,14 @@ def test_start_text_and_premium_jobs(hubenv):
     ev = say(hub, "/start", 9)
     text = ev.out[-1][0]
     assert 'Hello <a href="tg://user?id=9">User9</a>' in text and hub.bot_name in text
+    assert "Copy a full history" not in text, "own start text = the whole welcome, no default list after it"
+    long = "🤝 Hi {name}. " + "Line of the welcome text with details. " * 25  # > 900 characters
+    press(hub, "ast", OWNER)
+    say(hub, long, OWNER)
+    assert hub.settings.start_text == long.strip(), "never cut (a cut tag broke the message)"
+    press(hub, "ast", OWNER)
+    ev = say(hub, "x" * 3600, OWNER)
+    assert "too long" in ev.out[-1][0] and hub.settings.start_text == long.strip()
     assert hub.settings.user_max_jobs == 1 and hub.settings.premium_max_jobs == 3
     press(hub, "adp3:+", OWNER)
     assert hub.settings.premium_max_jobs == 4

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Keeps tgclone running. Restarts it 10 s after a crash and shows why it stopped.
-#   bash scripts/run.sh          (inside tmux:  tmux new -s tgclone 'bash scripts/run.sh')
+#   bash scripts/run.sh          (WSL: keep the window open; or: nohup bash scripts/run.sh > /dev/null 2>&1 &)
 # Ctrl+C stops it for good.
 cd "$(dirname "$0")/.." || exit 1
 MODE="${1:-live}"

@@ -53,6 +53,7 @@ BOT_COMMANDS = {"start": "Open the control panel", "profile": "Plan, account, lo
 OWNER_COMMANDS = {**BOT_COMMANDS, "admin": "🛡 Admin panel", "addpremium": "user days",
                   "rmpremium": "user", "block": "chat / link / folder", "unblock": "chat"}
 PHONE_RE = re.compile(r"^\+?\d[\d\s-]{6,16}\d$")
+START_TEXT_MAX = 3500  # visible characters of the owner's start text (message limit 4096)
 FOLDER_RE = re.compile(r"(?:t\.me|telegram\.me)/addlist/([\w-]+)")
 INVITE_RE = re.compile(r"(?:t\.me|telegram\.me)/(?:\+|joinchat/)([\w-]+)")
 IMG_URL_RE = re.compile(r"^https://\S+$")
@@ -564,16 +565,22 @@ class Hub:
         """/start: big photo on top (if the owner set one) with the screen as caption."""
         photo = self.settings.start_photo
         text, buttons = screen
-        if photo and len(ui.strip_tags(text)) <= 1000:
+        if photo:
+            fits = len(ui.strip_tags(text)) <= 1000  # Telegram caption limit (1024)
             try:
                 msg = await self.bot.send_file(event.chat_id, self._start_media or photo,
-                                               caption=text, buttons=buttons, parse_mode="html")
+                                               caption=text if fits else None,
+                                               buttons=buttons if fits else None, parse_mode="html")
                 if self._start_media is None and getattr(msg, "media", None) is not None:
                     self._start_media = msg.media
-                return
+                if fits:
+                    return
             except Exception as e:
                 log.warning("Start photo failed (%s) - sending text only", e)
-        await self._show(event, screen)
+        await self._show(event, screen)  # long text: photo above, text + buttons below
+
+    def _welcome_kw(self) -> dict:
+        return {"custom": bool(self.settings.start_text), "bot_name": getattr(self, "bot_name", "")}
 
     # ============================================================ routing
     def register(self) -> None:
@@ -692,7 +699,7 @@ class Hub:
         acc = self.access(event.sender_id)
         screen = ui.welcome(self.settings.trial_hours if self.settings.premium_enabled else 0,
                             owner_only=acc == "private", pending=acc == "pending",
-                            intro=await self.start_intro(event))
+                            intro=await self.start_intro(event), **self._welcome_kw())
         if edit:
             await self._show(event, screen, edit=True)
         else:
@@ -810,12 +817,17 @@ class Hub:
                     html_text.format(name="", first="", bot="", id="", plan="")
                 except (KeyError, IndexError, ValueError) as e:
                     raise ValueError(f"Unknown placeholder {e}. Use {{name}} {{bot}} {{plan}} {{id}}")
-                self.settings.start_text = html_text[:900]
+                visible = len(ui.strip_tags(html_text))
+                if visible > START_TEXT_MAX:  # never cut HTML: a cut emoji/quote tag broke the text
+                    raise ValueError(f"Start text is too long ({visible} characters, max {START_TEXT_MAX}). "
+                                     "Make it shorter and send again.")
+                self.settings.start_text = html_text
             self.acc.save_settings(self.settings)
             self.admin_wait = None
             await event.respond("✅ Start text saved. Preview:")
             return await self.send_start(event, ui.welcome(self.settings.trial_hours,
-                                                           intro=await self.start_intro(event)))
+                                                           intro=await self.start_intro(event),
+                                                           **self._welcome_kw()))
         if kind in ("plans", "pay"):
             text = (msg.raw_text or "").strip()
             clear = text == "-"
@@ -846,7 +858,8 @@ class Hub:
             self.acc.save_settings(self.settings)
             self.admin_wait = None
             await event.respond("✅ Start photo saved. Preview:")
-            return await self.send_start(event, ui.welcome(self.settings.trial_hours))
+            return await self.send_start(event, ui.welcome(self.settings.trial_hours,
+                                                           **self._welcome_kw()))
 
     async def hub_callback(self, event) -> None:
         parts = event.data.decode().split(":")

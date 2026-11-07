@@ -288,9 +288,16 @@ def test_start_photo_set_and_shown(hubenv):
     assert hub.settings.start_photo.endswith("start_photo.jpg") and hub.acc.settings().start_photo
     say(hub, "/start", 9)
     last = hub.bot.sent[-1]
-    assert last[0] == 9 and len(last) == 4 and "tgclone" in last[1], "photo with the welcome as caption"
+    assert last[0] == 9 and len(last) == 4 and "TG Clone" in last[1], "photo with the welcome as caption"
     say(hub, "/start", 9)
     assert hub.bot.sent[-1][3] == "UPLOADED", "uploaded once, then reused"
+    hub.settings.start_text = "Welcome {name}! " + "More text here. " * 80  # too long for a caption
+    n = len(hub.bot.sent)
+    ev = say(hub, "/start", 9)
+    photo = hub.bot.sent[n]
+    assert photo[1] is None and photo[2] is None, "long text: photo alone on top"
+    assert "More text here" in ev.out[-1][0] and ev.out[-1][1], "then the text with the buttons"
+    hub.settings.start_text = ""
     press(hub, "aps", OWNER)
     say(hub, "https://example.com/banner.jpg", OWNER)
     assert hub.settings.start_photo == "https://example.com/banner.jpg"
