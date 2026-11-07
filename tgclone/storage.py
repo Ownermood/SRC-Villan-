@@ -16,6 +16,7 @@ class Store:
                 src_chat INTEGER, src_id INTEGER, dest_chat INTEGER, dest_id INTEGER,
                 PRIMARY KEY (src_chat, src_id, dest_chat));
             CREATE TABLE IF NOT EXISTS progress(key TEXT PRIMARY KEY, last_id INTEGER);
+            CREATE TABLE IF NOT EXISTS pending_jobs(key TEXT PRIMARY KEY, kind TEXT, data TEXT);
             CREATE TABLE IF NOT EXISTS topic_map(
                 src_chat INTEGER, src_topic INTEGER, dest_chat INTEGER, dest_topic INTEGER,
                 PRIMARY KEY (src_chat, src_topic, dest_chat));
@@ -90,6 +91,19 @@ class Store:
             "SELECT dest_chat, dest_topic FROM topic_map WHERE src_chat=? AND src_topic=?",
             (src_chat, src_topic))
         return dict(rows.fetchall())
+
+    # jobs that must continue after a restart
+    def add_pending(self, key: str, kind: str, data: str) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO pending_jobs VALUES (?,?,?)", (key, kind, data))
+
+    def remove_pending(self, key: str) -> None:
+        with self.db:
+            self.db.execute("DELETE FROM pending_jobs WHERE key=?", (key,))
+
+    def pending(self) -> list:
+        return [dict(zip(("key", "kind", "data"), r))
+                for r in self.db.execute("SELECT key, kind, data FROM pending_jobs")]
 
     def count(self) -> int:
         return self.db.execute("SELECT COUNT(*) FROM msg_map").fetchone()[0]

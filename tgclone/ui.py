@@ -268,7 +268,8 @@ def settings_view(app: App) -> Screen:
         f"<b>Live</b> · edits {on_off(c.live.edit_sync)} · deletes {on_off(c.live.delete_sync)}\n"
         f"<b>Topics</b> · {'auto-create in groups with topics' if c.topics.enabled else 'off (all in General)'}\n"
         f"<b>Clone delay</b> · {c.past.delay:g}s · <b>Save delay</b> · {c.save.delay:g}s\n"
-        f"<b>Limits</b> · file {c.max_file_mb} MB · disk {c.max_disk_mb} MB · {c.max_jobs} jobs\n"
+        f"<b>Limits</b> · file {f'{c.max_file_mb} MB' if c.max_file_mb else 'no limit'} · "
+        f"posts/save {c.save.max_batch or 'no limit'} · {c.max_jobs} jobs\n"
         f"<b>Saved posts go to</b> · {target}</blockquote>"
     )
 
@@ -641,10 +642,10 @@ def admin_limits(hub) -> Screen:
     st = hub.settings
     return ("<b>⚙️ Limits</b> · <i>for users, not for you</i>\n\n<blockquote>"
             f"⏳ Jobs at once per user · <b>{st.user_max_jobs}</b>\n"
-            f"📥 Posts per save · <b>{st.user_max_batch}</b>\n"
+            f"📥 Posts per save · <b>{st.user_max_batch or '∞ no limit'}</b>\n"
             f"📊 Jobs at once, all users · <b>{st.max_total_jobs}</b></blockquote>",
             [[B("➖", "adj:-"), B(f"⏳ {st.user_max_jobs} jobs", "noop"), B("➕", "adj:+")],
-             [B("➖", "adx:-"), B(f"📥 {st.user_max_batch}/save", "noop"), B("➕", "adx:+")],
+             [B("➖", "adx:-"), B(f"📥 {st.user_max_batch or '∞'}/save", "noop"), B("➕", "adx:+")],
              [B("➖", "adt:-"), B(f"📊 {st.max_total_jobs} total", "noop"), B("➕", "adt:+")],
              [B("« Admin", "ad")]])
 

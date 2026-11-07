@@ -38,7 +38,7 @@ if [ "${1:-}" = "--service" ] && [ ! -d /run/systemd/system ]; then
         echo "      (in Windows PowerShell)  wsl --shutdown   -> reopen Ubuntu"
     fi
     echo "    Or run in background without systemd:"
-    echo "      tmux new -s tgclone '.venv/bin/python -m tgclone live'   (detach: Ctrl+B then D)"
+    echo "      tmux new -s tgclone 'bash scripts/run.sh'   (detach: Ctrl+B then D)"
 elif [ "${1:-}" = "--service" ]; then
     echo "==> 4/4 systemd service (user: $RUN_USER, dir: $APP_DIR)"
     $SUDO tee /etc/systemd/system/tgclone.service >/dev/null <<UNIT

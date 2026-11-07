@@ -147,7 +147,15 @@ def main() -> None:
     try:
         asyncio.run(_login() if args.mode == "login" else _run(args))
     except KeyboardInterrupt:
-        pass
+        logging.getLogger("tgclone").info("Stopped by Ctrl+C - running jobs resume on next start")
+    except SystemExit as e:
+        if e.code not in (0, None):
+            logging.getLogger("tgclone").error("Stopped: %s", e.code)
+        raise
+    except BaseException:
+        # keep the reason in data/tgclone.log even when the terminal window closes
+        logging.getLogger("tgclone").exception("tgclone crashed")
+        raise
 
 
 if __name__ == "__main__":

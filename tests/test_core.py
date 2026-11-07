@@ -5,7 +5,7 @@ import pytest
 from telethon.errors import ChatForwardsRestrictedError
 
 from fakes import Client, Msg, make_app
-from tgclone.config import Config, Forward, load_config, norm_ref, save_config, CONFIG_FILE
+from tgclone.config import DOWNLOAD_DIR, Config, Forward, load_config, norm_ref, save_config, CONFIG_FILE
 from tgclone.jobs import Job, JobManager
 from tgclone.message import CloneMessage, FileTooBig, file_type, media_key, send
 from tgclone.plugins import apply_plugins, load_plugins
@@ -113,8 +113,12 @@ def test_progress_and_limits():
     assert "down" in seen and "up" in seen
     with pytest.raises(FileTooBig):
         run(CloneMessage(Msg(1, kind="video", size=5 * 1048576)).download(max_mb=1))
-    with pytest.raises(FileTooBig):
-        run(CloneMessage(Msg(1, kind="video", size=5 * 1048576)).download(max_disk_mb=1))
+    # one file bigger than the disk cap is allowed when nothing else is downloading
+    import shutil
+    shutil.rmtree(DOWNLOAD_DIR, ignore_errors=True)
+    big = CloneMessage(Msg(1, kind="video", size=5 * 1048576))
+    assert os.path.exists(run(big.download(max_disk_mb=1)))
+    big.cleanup()
     tm = CloneMessage(Msg(3, kind="video"))
     p = run(tm.download())
     assert os.path.exists(p)

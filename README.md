@@ -130,6 +130,14 @@ File types: `text photo video gif audio voice video_note sticker document poll c
 - **⭐ Premium emoji**: every screen and button uses the animated UI pack. If Telegram doesn't allow the bot to use custom emoji, it falls back to normal emoji automatically. You can switch this in the admin panel.
 - Owner commands: `/admin`, `/addpremium <id|@user> <days>`, `/rmpremium <id>`, `/block <chat|link|folder>`, `/unblock <chat>`.
 
+## Reliability (v4.1)
+
+- **Auto-resume**: a clone or save that was running when the bot stopped (crash, restart, Ctrl+C) continues by itself on the next start, from where it stopped. Only ⛔ Stop forgets it.
+- **No limits by default**: no file size cap (Telegram itself allows 2 GB, or 4 GB with premium), no posts-per-save cap. A single file bigger than the temp-disk cap still goes through.
+- **Polls and quizzes** are copied (a quiz nobody answered is copied as a normal poll, because its answer is hidden).
+- **Premium emoji in source posts**: accounts without Telegram Premium can't send them, so they are sent as normal emoji instead of failing.
+- `scripts/run.sh` restarts the bot after a crash and prints why it stopped. A crash traceback is always written to `data/tgclone.log`.
+
 ## Groups with topics (forums)
 
 Clone a group with topics into another group and each topic is recreated automatically:

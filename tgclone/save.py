@@ -45,12 +45,14 @@ async def save_range(app: App, chat, first: int, last: int, target: int,
     if cid is not None and app.blocked(cid):
         raise ValueError("This chat can't be saved from (blocked by the owner).")
     s = app.cfg.save
-    max_batch = min(s.max_batch, (app.caps or {}).get("max_batch", s.max_batch))
-    if last - first + 1 > max_batch:
+    limits = [x for x in (s.max_batch, (app.caps or {}).get("max_batch", 0)) if x]
+    max_batch = min(limits) if limits else 0  # 0 = no limit
+    if max_batch and last - first + 1 > max_batch:
         raise ValueError(f"Range too big ({last - first + 1} > {max_batch} posts per save)")
     sender = app.control  # deliver to the admin through the bot if present
     sent = failed = 0
     buf: List[Message] = []
+    done_upto = app.store.get_progress(job.key) if job else 0  # resume after a restart
     if job:
         job.start_id, job.end_id = first - 1, last
 
@@ -73,6 +75,7 @@ async def save_range(app: App, chat, first: int, last: int, target: int,
                 tm.cleanup()
         if job:
             job.done, job.failed, job.last_id = sent, failed, msgs[-1].id
+            app.store.set_progress(job.key, msgs[-1].id)
         if s.delay:
             await asyncio.sleep(s.delay)
 
@@ -82,7 +85,7 @@ async def save_range(app: App, chat, first: int, last: int, target: int,
         for m in msgs:
             if job and job.cancelled:
                 return sent, failed
-            if m is None or m.action is not None or (not m.message and not m.media):
+            if m is None or m.id <= done_upto or m.action is not None or (not m.message and not m.media):
                 continue
             if buf and m.grouped_id != buf[0].grouped_id:
                 await flush()

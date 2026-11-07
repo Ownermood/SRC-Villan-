@@ -17,7 +17,7 @@ log = logging.getLogger("tgclone")
 class HubSettings(BaseModel):
     mode: str = "open"  # open = anyone | approve = owner approves | owner = only the owner
     user_max_jobs: int = Field(2, ge=1, le=10)  # parallel jobs per user (owner: unlimited by this)
-    user_max_batch: int = Field(500, ge=10, le=10000)  # posts per save job per user
+    user_max_batch: int = Field(0, ge=0)  # posts per save job per user (0 = no limit)
     max_total_jobs: int = Field(10, ge=1, le=100)  # all users together
     max_users: int = Field(0, ge=0)  # 0 = unlimited logged-in users
     premium_enabled: bool = True  # plans: new users get a free trial, then need premium days
@@ -118,7 +118,10 @@ class Accounts:
     # ---------------------------------------------------------- settings
     def settings(self) -> HubSettings:
         row = self.db.execute("SELECT value FROM kv WHERE key='hub'").fetchone()
-        return HubSettings(**json.loads(row[0])) if row else HubSettings()
+        data = json.loads(row[0]) if row else {}
+        if data.get("user_max_batch") == 500:  # old default limit -> no limit
+            data["user_max_batch"] = 0
+        return HubSettings(**data)
 
     def save_settings(self, s: HubSettings) -> None:
         with self.db:

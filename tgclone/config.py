@@ -107,7 +107,7 @@ class SaveSettings(BaseModel):
     """Save-restricted-content: send a t.me link to the bot, get the post back."""
     target: ChatRef = ""  # where saved posts go ("" = the chat that asked)
     use_plugins: bool = False  # apply filter/replace/caption... to saved posts
-    max_batch: int = Field(1000, ge=1, le=10000)
+    max_batch: int = Field(0, ge=0)  # posts per save (0 = no limit)
     delay: float = Field(1.0, ge=0, le=60)
 
 
@@ -128,8 +128,8 @@ class Config(BaseModel):
     forward_mode: bool = False  # True = real forward ("Forwarded from" tag)
     send_via_bot: bool = False  # user account reads, BOT_TOKEN account sends
     protected_fallback: bool = True  # download + re-upload when copy is blocked
-    max_file_mb: int = 2000  # skip bigger files on download (0 = no limit)
-    max_disk_mb: int = 6000  # total temp download space; downloads wait when full (0 = off)
+    max_file_mb: int = 0  # skip bigger files (0 = no limit; Telegram itself allows 2 GB / 4 GB premium)
+    max_disk_mb: int = 6000  # temp download space; downloads wait when full (0 = off). One file may exceed it
     max_jobs: int = Field(3, ge=1, le=10)  # clone/save jobs running at the same time
     live: LiveSettings = LiveSettings()
     past: PastSettings = PastSettings()
@@ -153,6 +153,11 @@ def load_config(path: Path = None, home: Path = None) -> Config:
         log.info("Created default %s", path)
     else:
         cfg = Config.model_validate_json(path.read_text(encoding="utf8"))
+        # old defaults were limits; the new default is "no limit"
+        if cfg.max_file_mb == 2000:
+            cfg.max_file_mb = 0
+        if cfg.save.max_batch == 1000:
+            cfg.save.max_batch = 0
     cfg._home = Path(home) if home else DATA_DIR
     return cfg
 

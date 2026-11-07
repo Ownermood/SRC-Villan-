@@ -4,11 +4,15 @@ import asyncio
 import logging
 import mimetypes
 import os
+import random
+import re
 import uuid
 from typing import List, Optional
 
 from telethon import TelegramClient
-from telethon.errors import ChatForwardsRestrictedError, FloodWaitError, ServerError
+from telethon.errors import (ChatForwardsRestrictedError, DocumentInvalidError, FloodWaitError,
+                             ServerError)
+from telethon.tl import functions
 from telethon.tl import types
 from telethon.tl.custom.message import Message
 
@@ -55,10 +59,9 @@ async def _wait_disk(need: int, max_disk_mb: int, timeout: int = 1800) -> None:
     if not max_disk_mb:
         return
     cap = max_disk_mb * 1024 * 1024
-    if need > cap:
-        raise FileTooBig(f"{need / 1048576:.0f} MB > max_disk_mb={max_disk_mb}")
     waited = 0
-    while _dir_size(DOWNLOAD_DIR) + need > cap:
+    # a single file bigger than the cap is fine once nothing else is downloading
+    while _dir_size(DOWNLOAD_DIR) + need > cap and not (need > cap and _dir_size(DOWNLOAD_DIR) == 0):
         if waited >= timeout:
             raise FileTooBig("download folder full (max_disk_mb), gave up waiting")
         if waited == 0:
@@ -180,8 +183,73 @@ async def _uploaded_doc(client: TelegramClient, tm: CloneMessage, path: str,
         force_file=True if tm.file_type == "document" else None)
 
 
+_MD_EMOJI = re.compile(r"\[([^\]]+)\]\(emoji/\d+\)")
+async def _is_premium(client) -> bool:
+    """Cached on the client itself (account has Telegram Premium / is a bot)."""
+    cached = getattr(client, "_tgc_premium", None)
+    if cached is None:
+        try:
+            me = await client.get_me()
+            cached = bool(getattr(me, "premium", False)) or bool(getattr(me, "bot", False))
+        except Exception:
+            cached = True  # unknown: try as is, the retry strips if refused
+        client._tgc_premium = cached
+    return cached
+
+
+def _no_custom_emoji(ents):
+    """Non-premium accounts can't send custom (premium) emoji: keep the plain emoji."""
+    if not ents:
+        return ents
+    return [e for e in ents if not isinstance(e, types.MessageEntityCustomEmoji)] or None
+
+
+def poll_media(msg: Message) -> types.InputMediaPoll:
+    """Copy of a poll / quiz (Telethon can't send MessageMediaPoll as a file)."""
+    media = msg.media
+    p, res = media.poll, media.results
+    answers = list(p.answers)
+    correct = None
+    quiz = p.quiz
+    if quiz:
+        options = [a.option for a in answers]
+        correct = [options.index(r.option) for r in (res.results or []) if r.correct and r.option in options]
+        if not correct:
+            quiz = None  # unanswered quiz: the right answer is hidden -> copy as a normal poll
+            correct = None
+    poll = types.Poll(id=random.randrange(1, 2 ** 62), question=p.question, answers=answers, hash=0,
+                      public_voters=p.public_voters, multiple_choice=p.multiple_choice, quiz=quiz,
+                      shuffle_answers=getattr(p, "shuffle_answers", None))
+    return types.InputMediaPoll(poll=poll, correct_answers=correct,
+                                solution=res.solution if quiz else None,
+                                solution_entities=res.solution_entities if quiz else None)
+
+
+async def _send_media_raw(client, dest: int, media, text: str, ents, reply_to: Optional[int]) -> list:
+    """messages.sendMedia for media Telethon's send_file refuses (polls)."""
+    res = await retry(client, functions.messages.SendMediaRequest(
+        peer=await client.get_input_entity(dest), media=media, message=text or "",
+        entities=ents or None, random_id=random.randrange(-2 ** 63, 2 ** 63),
+        reply_to=types.InputReplyToMessage(reply_to) if reply_to else None))
+    sent = [u.message for u in getattr(res, "updates", []) or []
+            if isinstance(getattr(u, "message", None), types.Message)]
+    return sent[:1]
+
+
+async def _send_poll(client, dest: int, msg: Message, text: str, ents, reply_to) -> list:
+    media = poll_media(msg)
+    try:
+        return await _send_media_raw(client, dest, media, text, ents, reply_to)
+    except Exception as e:
+        if "PUBLIC" not in str(e).upper() or not media.poll.public_voters:
+            raise
+        media.poll.public_voters = None  # channels don't allow public votes
+        return await _send_media_raw(client, dest, media, text, ents, reply_to)
+
+
 async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
-                reply_to: Optional[int], download: bool, cfg: Config, progress=None) -> list:
+                reply_to: Optional[int], download: bool, cfg: Config, progress=None,
+                plain_emoji: bool = False) -> list:
     up = (lambda c, t: progress("up", c, t)) if progress else None
     if len(tms) > 1:  # album
         files = []
@@ -194,16 +262,21 @@ async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
                 files.append(await _uploaded_doc(client, tm, path, await thumbs.pick(cfg, tm), up))
             else:
                 files.append(path)
+        captions = [_MD_EMOJI.sub(r"\1", tm.text) if plain_emoji else tm.text for tm in tms]
         return _as_list(await retry(client.send_file, dest, files,
-                                    caption=[tm.text for tm in tms], reply_to=reply_to,
+                                    caption=captions, reply_to=reply_to,
                                     progress_callback=up if download else None))
 
     tm, msg = tms[0], tms[0].message
     # exact formatting when text untouched, markdown when a plugin changed it
     if tm.text_changed:
         text, ents = tm.text, None
+        if plain_emoji:
+            text = _MD_EMOJI.sub(r"\1", text)
     else:
         text, ents = msg.message or "", msg.entities
+        if plain_emoji:
+            ents = _no_custom_emoji(ents)
 
     if tm.new_file or (download and tm.file_type in FILE_TYPES):
         path = tm.new_file or await tm.download(cfg.max_file_mb, cfg.max_disk_mb, progress)
@@ -222,6 +295,8 @@ async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
     media = None if tm.file_type == "text" else msg.media
     if media is None and not text:
         return []
+    if tm.file_type == "poll":
+        return await _send_poll(client, dest, msg, text, ents, reply_to)
     return _as_list(await retry(client.send_message, dest, text, file=media,
                                 formatting_entities=ents, reply_to=reply_to,
                                 link_preview=bool(msg.web_preview)))
@@ -264,10 +339,19 @@ async def send(client: TelegramClient, dest: int, tms: List[CloneMessage], cfg: 
     must_download = protected or not same_client or rethumb
     if must_download and not cfg.protected_fallback and protected:
         raise ChatForwardsRestrictedError(None)
+    plain = not await _is_premium(client)
     try:
-        return await _copy(client, dest, tms, reply_to, must_download, cfg, progress)
+        try:
+            return await _copy(client, dest, tms, reply_to, must_download, cfg, progress, plain)
+        except DocumentInvalidError:
+            if plain and must_download:
+                raise
+            # premium emoji / a document the sender can't reuse: plain emoji + fresh upload
+            log.info("Retrying %s with plain emoji / re-upload", tms[0].message.id)
+            client._tgc_premium = False
+            return await _copy(client, dest, tms, reply_to, True, cfg, progress, True)
     except ChatForwardsRestrictedError:
         if must_download or not cfg.protected_fallback:
             raise
         log.info("Chat is protected, falling back to download + upload")
-        return await _copy(client, dest, tms, reply_to, True, cfg, progress)
+        return await _copy(client, dest, tms, reply_to, True, cfg, progress, plain)

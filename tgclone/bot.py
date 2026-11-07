@@ -5,6 +5,7 @@ User account only (no BOT_TOKEN): text commands with "." prefix from your own ac
 """
 
 import asyncio
+import json
 import logging
 import time
 
@@ -154,8 +155,11 @@ class Panel:
         return await self.show(event, ui.thumb_view(self.app))
 
     # ------------------------------------------------------------- jobs
-    async def run_job(self, event, job: Job, fn):
-        """Start a job and keep a live progress card updated."""
+    async def run_job(self, event, job: Job, fn, resume: tuple = None):
+        """Start a job and keep a live progress card updated.
+
+        resume=(kind, data): remembered so the job continues by itself after a restart.
+        """
         caps = self.app.caps or {}
         self.app.jobs.max_jobs = min(self.app.cfg.max_jobs, caps.get("max_jobs", 99))
         if self.hub:
@@ -166,6 +170,9 @@ class Panel:
 
         async def finish(j):
             done.set()
+            # user stop / done / failed -> forget it; a shutdown keeps it for auto-resume
+            if resume and (j.cancelled or j.state in ("done", "failed")):
+                self.app.store.remove_pending(job.key)
             if card:
                 try:
                     await self.show(card, ui.job_card(j), edit=True)
@@ -179,6 +186,8 @@ class Panel:
                 except Exception:
                     pass
 
+        if resume:
+            self.app.store.add_pending(job.key, resume[0], json.dumps(resume[1]))
         self.app.jobs.start(job, fn, finish)
 
         async def ticker():
@@ -207,20 +216,24 @@ class Panel:
         dests = [await app.resolve(d) for d in fwd.dest]
         title = f"{await app.title(src)} → {len(dests)} chat(s){' (fresh)' if fresh else ''}"
         job = Job("clone", ui.esc(title), f"clone:{app.store.key(src, dests)}")
-        await self.run_job(event, job, lambda j: run_forward(app, fwd, fresh=fresh, job=j))
+        data = {"forward": {**fwd.model_dump(), "source": src, "dest": dests}}  # resume = not fresh
+        await self.run_job(event, job, lambda j: run_forward(app, fwd, fresh=fresh, job=j),
+                           resume=("clone", data))
 
-    async def start_save(self, event, chat, first, last):
+    async def start_save(self, event, chat, first, last, target=None):
         app = self.app
         self.needs_login("Saving posts")
-        target = event.chat_id
-        if app.cfg.save.target:
-            target = await app.control.get_peer_id(app.cfg.save.target)
+        if target is None:
+            target = event.chat_id
+            if app.cfg.save.target:
+                target = await app.control.get_peer_id(app.cfg.save.target)
         n = last - first + 1
         job = Job("save", ui.esc(f"{chat} · {n} post(s)"), f"save:{chat}:{first}:{last}:{target}")
 
         async def fn(j):
             await save_range(app, chat, first, last, target, j)
-        await self.run_job(event, job, fn)
+        await self.run_job(event, job, fn, resume=("save", {"chat": chat, "first": first,
+                                                           "last": last, "target": target}))
 
     # ------------------------------------------------------------- commands
     async def cmd(self, event, name: str, args: str):

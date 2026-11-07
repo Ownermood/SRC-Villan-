@@ -8,6 +8,7 @@ Each user's files live in data/users/<uid>/; logins are stored encrypted (accoun
 
 import asyncio
 import io
+import json
 import logging
 import re
 import shutil
@@ -25,7 +26,7 @@ from tgclone import __version__, emoji, live, ui
 from tgclone.accounts import Accounts, load_key
 from tgclone.app import App
 from tgclone.bot import Panel
-from tgclone.config import CONFIG_FILE, DATA_DIR, Secrets
+from tgclone.config import CONFIG_FILE, DATA_DIR, Forward, Secrets
 
 log = logging.getLogger("tgclone")
 
@@ -198,7 +199,35 @@ class Hub:
             live.register(app)
         self.ws[uid] = (app, Panel(app, self.live, hub=self))
         log.info("Workspace %s online (%s forwards)", uid, len(app.cfg.forwards))
+        self._tasks.append(asyncio.create_task(self.resume_jobs(uid)))
         return app
+
+    async def resume_jobs(self, uid: int, delay: float = 3) -> int:
+        """Clones / saves that were running when the bot stopped continue by themselves."""
+        await asyncio.sleep(delay)
+        item = self.ws.get(uid)
+        if not item or not self.plan_ok(uid):
+            return 0
+        app, panel = item
+        started = 0
+        for p in app.store.pending():
+            target = _Chat(self.bot, uid)
+            try:
+                data = json.loads(p["data"])
+                if p["kind"] == "clone":
+                    await panel.start_clone(target, Forward(**data["forward"]), fresh=False)
+                elif p["kind"] == "save":
+                    await panel.start_save(target, data["chat"], data["first"], data["last"],
+                                           data["target"])
+                started += 1
+            except Exception as e:
+                log.warning("Resume %s for %s failed: %s", p["key"], uid, e)
+                app.store.remove_pending(p["key"])
+                await self._notify(uid, f"⚠️ Couldn't resume a job after restart: {ui.esc(str(e))}")
+        if started:
+            await self._notify(uid, f"🔄 <b>Resumed {started} job(s)</b> after a restart — "
+                                    "continuing from where they stopped.")
+        return started
 
     async def open_bot_workspace(self, uid: int) -> App:
         """Without login: the shared bot reads new posts (where it is admin) and sends."""
@@ -769,8 +798,8 @@ class Hub:
             elif k == "adt":
                 st.max_total_jobs = max(1, min(100, st.max_total_jobs + (1 if up else -1)))
             else:
-                steps = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
-                i = steps.index(st.user_max_batch) if st.user_max_batch in steps else 3
+                steps = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 0]  # 0 = no limit (last)
+                i = steps.index(st.user_max_batch) if st.user_max_batch in steps else len(steps) - 1
                 st.user_max_batch = steps[max(0, min(len(steps) - 1, i + (1 if up else -1)))]
             save()
             return await show(ui.admin_limits(self))
@@ -1051,6 +1080,16 @@ class Hub:
         await self._show(event, (f"✅ <b>Logged in as {ui.esc(name)}</b>\nEvery feature is unlocked.",
                                  None), edit=edit)
         await self._show(event, await ui.main_menu(app))
+
+
+class _Chat:
+    """Event-like target to send job cards to a user without an incoming message."""
+
+    def __init__(self, bot, uid: int) -> None:
+        self.bot, self.chat_id, self.sender_id = bot, uid, uid
+
+    async def respond(self, text, **kw):
+        return await self.bot.send_message(self.chat_id, text, **kw)
 
 
 class _TextMsg:

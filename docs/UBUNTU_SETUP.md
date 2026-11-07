@@ -47,8 +47,10 @@ journalctl -u tgclone -f           # live logs
 **WSL / bina systemd:**
 ```bash
 sudo apt install -y tmux
-tmux new -s tgclone '.venv/bin/python -m tgclone live'
+tmux new -s tgclone 'bash scripts/run.sh'
 ```
+`scripts/run.sh` crash hone par 10 second mein khud restart karta hai aur band hone ki wajah dikhata hai.
+Restart ke baad adhoore clone / save **khud wahin se aage chalte hain**.
 Bahar nikalna: `Ctrl+B` phir `D`. Wapas aana: `tmux attach -t tgclone`.
 
 > WSL par systemd on karna ho: `printf '[boot]\nsystemd=true\n' | sudo tee /etc/wsl.conf`,
@@ -113,7 +115,7 @@ Commands (sirf owner): `/admin` · `/addpremium 5021 30` · `/rmpremium 5021` ·
 cd ~/SRC-Villan-
 git pull
 .venv/bin/pip install -r requirements.txt -q
-sudo systemctl restart tgclone        # ya tmux mein Ctrl+C karke dobara chalao
+sudo systemctl restart tgclone        # ya: tmux kill-session -t tgclone; tmux new -s tgclone 'bash scripts/run.sh'
 ```
 
 ## Backup

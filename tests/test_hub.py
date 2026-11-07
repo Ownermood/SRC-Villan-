@@ -249,7 +249,9 @@ def test_limits_for_users_not_owner(hubenv):
     hub = hubenv.new_hub()
     login(hub, OWNER, "+91000000001", env=hubenv)
     login(hub, 5, "+91000000005", env=hubenv)
-    assert hub.ws[OWNER][0].caps is None and hub.ws[5][0].caps["max_batch"] == 500
+    assert hub.ws[OWNER][0].caps is None and hub.ws[5][0].caps["max_batch"] == 0, "no limit by default"
+    hub.settings.user_max_batch = 500
+    hub.ws[5][0].caps = hub.caps(5)
     with pytest.raises(ValueError, match="500 posts"):
         run(save_range(hub.ws[5][0], "chan", 1, 600, 5))
     press(hub, "adj:+", OWNER)
