@@ -264,3 +264,16 @@ def test_detects_when_telegram_removes_custom_emoji():
     assert emoji.status == "working"
     emoji.check_sent("plain", _t.SimpleNamespace(entities=[]))
     assert emoji.status == "working", "plain screens don't change the verdict"
+
+
+def test_premium_emoji_retried_after_a_refusal(monkeypatch):
+    from tgclone import emoji
+    emoji.set_enabled(True)
+    emoji.disable_for_session()
+    assert not emoji.active()
+    import time
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + emoji.RETRY_AFTER + 1)
+    assert emoji.active(), "tried again later (e.g. after the owner bought Premium)"
+    monkeypatch.setattr(time, "time", real)
+    emoji.set_enabled(True)

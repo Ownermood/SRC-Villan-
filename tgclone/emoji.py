@@ -62,19 +62,21 @@ PACK.update({k.replace(VS, ""): PACK[v.replace(VS, "")] for k, v in ALIAS.items(
 
 _enabled = True  # owner switch (admin panel)
 status = "unknown"  # unknown | working | removed  (what Telegram did with the last screen)
-_broken = False  # Telegram refused once this run -> plain from now on
+_broken_until = 0.0  # Telegram refused -> plain for a while, then try again (Premium may be bought)
+RETRY_AFTER = 600
 # longest first so multi-codepoint emoji win; optional VS16 after each
 _RE = re.compile("|".join(re.escape(k) + f"{VS}?" for k in sorted(PACK, key=len, reverse=True)))
 _TAG_RE = re.compile(r'<tg-emoji emoji-id="\d+">(.*?)</tg-emoji>', re.S)
 
 
 def set_enabled(on: bool) -> None:
-    global _enabled, _broken
-    _enabled, _broken = on, False
+    global _enabled, _broken_until
+    _enabled, _broken_until = on, 0.0
 
 
 def active() -> bool:
-    return _enabled and not _broken
+    import time
+    return _enabled and time.time() >= _broken_until
 
 
 def check_sent(sent_text: str, message) -> None:
@@ -92,8 +94,10 @@ def check_sent(sent_text: str, message) -> None:
 
 
 def disable_for_session() -> None:
-    global _broken
-    _broken = True
+    """Plain emoji for RETRY_AFTER seconds, then premium is tried again."""
+    global _broken_until
+    import time
+    _broken_until = time.time() + RETRY_AFTER
 
 
 def doc_id(emoji: str) -> Optional[int]:

@@ -628,9 +628,10 @@ def _emoji_note(st) -> str:
         return "⭐ <b>Premium emoji</b> · off"
     return {
         "working": "⭐ <b>Premium emoji</b> · ✅ Telegram shows them",
-        "removed": "⭐ <b>Premium emoji</b> · ❌ Telegram removes them — a bot may use custom emoji only "
-                   "if it has a <b>Fragment username</b> (or the bot owner has Telegram Premium). "
-                   "Everything else works normally.",
+        "removed": "⭐ <b>Premium emoji</b> · ❌ Telegram removes them. Since Bot API 9.4 (Feb 2026) a bot "
+                   "may use premium emoji only if <b>the account that owns the bot in @BotFather has "
+                   "Telegram Premium</b>. Buy Premium on that account — they appear by themselves, "
+                   "no restart needed. Everything else works normally.",
     }.get(emoji.status, "⭐ <b>Premium emoji</b> · checking on the next screen…")
 
 

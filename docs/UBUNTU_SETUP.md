@@ -103,7 +103,7 @@ Sirf naye posts, aur sirf woh chats jahan forwarding allowed hai (protected nahi
 | 💎 Premium | ➕ Give premium: `user_id days` ya `@username days` · ➖ Remove · trial hours · plans on/off |
 | 🚫 Blocked chats | Folder link `t.me/addlist/…`, `@username`, `t.me/c/…`, invite `t.me/+…`, `-100…` id ya forwarded message — ye chats koi clone nahi kar sakta |
 | 🖼 Start photo | Photo bhejo ya `https://….jpg` link — /start par bada dikhega |
-| ⭐ Premium emoji | Animated emoji on/off (Telegram allow na kare to khud normal emoji) |
+| ⭐ Premium emoji | Animated emoji on/off. **Telegram ka niyam:** bot ke owner (jis account se @BotFather mein bot banaya) ke paas **Telegram Premium** ho tabhi dikhte hain, warna normal emoji |
 
 Commands (sirf owner): `/admin` · `/addpremium 5021 30` · `/rmpremium 5021` · `/block t.me/addlist/xyz` · `/unblock -100123`
 

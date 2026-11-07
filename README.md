@@ -127,7 +127,7 @@ File types: `text photo video gif audio voice video_note sticker document poll c
 - **🤖 Without login**: users add the bot as admin in their chats (they must be admins too) and get live forwarding of new posts. Protected chats are refused. Logging in later keeps their settings.
 - **📌 Pins**: pinning and unpinning in the source is copied, and the "… pinned a message" notice in the destination is deleted at once. A history clone copies pins too.
 - **🖼 Start photo**: send a photo or an https image link in 🛡 Admin → Start photo. It shows big on top of /start.
-- **⭐ Premium emoji**: every screen and button uses the animated UI pack. If Telegram doesn't allow the bot to use custom emoji, it falls back to normal emoji automatically. You can switch this in the admin panel.
+- **⭐ Premium emoji**: every screen and button uses the animated UI pack. Telegram rule (Bot API, Feb 2026): a bot can show custom emoji only if **the account that owns the bot in @BotFather has Telegram Premium**. Without it Telegram shows normal emoji (the admin panel tells you which case you are in). You can switch this in the admin panel.
 - Owner commands: `/admin`, `/addpremium <id|@user> <days>`, `/rmpremium <id>`, `/block <chat|link|folder>`, `/unblock <chat>`.
 
 ## Reliability (v4.1)
