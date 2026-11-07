@@ -7,6 +7,7 @@ returns None and the caller falls back to Telethon's normal transfer.
 """
 
 import asyncio
+import json
 import logging
 import os
 import random
@@ -25,7 +26,44 @@ PER_CONNECTION = 4  # requests in flight on each extra connection
 POOL_SIZE = 10 * 1024 * 1024  # use extra connections from this size
 IDLE_CLOSE = 60  # seconds an unused shared pool stays open
 PAUSE_AFTER_RESET = 600  # Telegram cut our extra connections: one connection for 10 min
+MAX_PAUSE = 7 * 24 * 3600  # after repeated resets: extra connections stay off for a week
 MIN_SIZE = 2 * 1024 * 1024  # smaller files: normal transfer is fine
+STATE_FILE = None  # set by the hub: remembers the pause across restarts (same network/IP)
+_state = {"fails": 0, "off": 0.0}
+
+
+def load_state(path) -> None:
+    """Read the remembered pause (the hub calls this at start)."""
+    global STATE_FILE
+    STATE_FILE = path
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        _state.update(fails=int(d.get("fails", 0)), off=float(d.get("off", 0)))
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def _save_state() -> None:
+    if STATE_FILE is None:
+        return
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(_state, f)
+    except OSError:
+        pass
+
+
+def _watch(snd) -> None:
+    fut = getattr(snd, "_disconnected", None)
+    if fut is not None:
+        fut.add_done_callback(_consume)
+
+
+def _consume(fut) -> None:
+    """Telethon puts the disconnect error on a future nobody awaits ('never retrieved')."""
+    if not fut.cancelled():
+        fut.exception()
 
 
 class _QuietLoggers(dict):
@@ -68,6 +106,7 @@ async def open_pool(client, dc_id: int, n: int):
         await snd.connect(client._connection(dc.ip_address, dc.port, dc.id, loggers=quiet,
                                              proxy=client._proxy, local_addr=client._local_addr))
         senders.append(snd)
+        _watch(snd)
         init = copy.copy(client._init_request)  # never touch Telethon's shared request
         if home:
             init.query = functions.help.GetNearestDcRequest()
@@ -109,7 +148,23 @@ class _Shared:
 
 
 def _paused(client) -> bool:
-    return time.time() < client.__dict__.get("_tgc_pool_off", 0)
+    now = time.time()
+    return now < client.__dict__.get("_tgc_pool_off", 0) or (STATE_FILE is not None and now < _state["off"])
+
+
+def _broken(client) -> None:
+    """Telegram cut / refused the extra connections: pause them (longer each time, remembered)."""
+    if not _paused(client):  # parallel transfers on the same broken pool count once
+        fails = max(client.__dict__.get("_tgc_pool_fails", 0),
+                    _state["fails"] if STATE_FILE is not None else 0) + 1
+        pause = min(PAUSE_AFTER_RESET * 6 ** (fails - 1), MAX_PAUSE)  # 10m, 1h, 6h, 36h, 7d
+        client._tgc_pool_fails = _state["fails"] = fails
+        client._tgc_pool_off = _state["off"] = time.time() + pause
+        _save_state()
+        log.warning("Telegram closed the extra connections on this network - single "
+                    "connection (8 parts in flight) for the next %s",
+                    f"{pause // 86400} days" if pause >= 86400 else
+                    f"{pause // 3600} h" if pause >= 3600 else f"{pause // 60} min")
 
 
 async def acquire(client, dc_id: int):
@@ -137,19 +192,17 @@ async def acquire(client, dc_id: int):
     async def release(broken: bool = False) -> None:
         p.refs -= 1
         if broken:
-            fails = client.__dict__.get("_tgc_pool_fails", 0) + 1
-            client._tgc_pool_fails = fails
-            pause = min(PAUSE_AFTER_RESET * 6 ** (fails - 1), 24 * 3600)  # 10 min, 1 h, 6 h, 24 h
-            client._tgc_pool_off = time.time() + pause
-            log.warning("Extra connections refused by Telegram (network / IP limit) - "
-                        "one connection for the next %s", f"{pause // 3600} h" if pause >= 3600
-                        else f"{pause // 60} min")
+            _broken(client)
             async with p.lock:
                 if p.close is not None:
                     await p.close()
                 p.callers = p.close = None
-        elif p.refs == 0:
-            p.idle = asyncio.ensure_future(close_later())
+        else:
+            if client.__dict__.get("_tgc_pool_fails") or _state["fails"]:
+                client._tgc_pool_fails = _state["fails"] = 0
+                _save_state()
+            if p.refs == 0:
+                p.idle = asyncio.ensure_future(close_later())
     return callers, release
 
 
@@ -176,7 +229,8 @@ async def _run_all(worker, slots) -> None:
 
 
 async def download(client, message, path: str,
-                   progress: Optional[Callable[[int, int], None]] = None) -> Optional[str]:
+                   progress: Optional[Callable[[int, int], None]] = None,
+                   pool: bool = True) -> Optional[str]:
     """Parallel download of a document to `path`. None = use the normal download."""
     doc = getattr(message, "document", None)
     size = getattr(doc, "size", 0) or 0
@@ -186,12 +240,13 @@ async def download(client, message, path: str,
     dc_id = dc_id or client.session.dc_id
     release = None
     exported = False
-    if size >= POOL_SIZE and CONNECTIONS > 1:
+    if pool and size >= POOL_SIZE and CONNECTIONS > 1 and not _paused(client):
         try:
             callers, release = await acquire(client, dc_id)
             per = PER_CONNECTION
         except Exception as e:
-            log.info("Extra connections not used (%s) - one connection", e)
+            log.info("Extra connections could not open (%s)", e)
+            _broken(client)
     if release is None:
         exported = dc_id != client.session.dc_id
         sender = await client._borrow_exported_sender(dc_id) if exported else client._sender
@@ -232,24 +287,30 @@ async def download(client, message, path: str,
         await _report(progress, size, size)
         return path
     except Exception as e:
-        log.info("Fast download not possible (%s) - using normal download", e)
-        if release is not None:
+        retry = release is not None
+        if retry:
             await release(broken=True)
             release = None
+        else:
+            log.info("Fast download not possible (%s) - using normal download", e)
         try:
             os.remove(path)
         except OSError:
             pass
-        return None
+        if not retry:
+            return None
     finally:
         os.close(fd)
         if release is not None:
             await release()
         elif exported:
             await client._return_exported_sender(sender)
+    # extra connections were cut: same file again on one connection (still 8 parts in flight)
+    return await download(client, message, path, progress, pool=False)
 
 
-async def upload(client, path: str, progress: Optional[Callable[[int, int], None]] = None):
+async def upload(client, path: str, progress: Optional[Callable[[int, int], None]] = None,
+                 pool: bool = True):
     """Parallel upload. Returns an InputFileBig, or None to use the normal upload."""
     size = os.path.getsize(path)
     if size <= 10 * 1024 * 1024:  # Telegram wants small files uploaded with MD5 parts
@@ -262,12 +323,14 @@ async def upload(client, path: str, progress: Optional[Callable[[int, int], None
     done = 0
     release = None
     callers, per = [client], WORKERS
-    if size >= POOL_SIZE and CONNECTIONS > 1 and hasattr(client, "_get_dc"):
+    if pool and size >= POOL_SIZE and CONNECTIONS > 1 and hasattr(client, "_get_dc") \
+            and not _paused(client):
         try:
             callers, release = await acquire(client, client.session.dc_id)
             per = PER_CONNECTION
         except Exception as e:
-            log.info("Extra upload connections not used (%s) - one connection", e)
+            log.info("Extra upload connections could not open (%s)", e)
+            _broken(client)
     fd = os.open(path, os.O_RDONLY)
     try:
         async def worker(call):
@@ -295,12 +358,16 @@ async def upload(client, path: str, progress: Optional[Callable[[int, int], None
         await _run_all(worker, slots)
         return types.InputFileBig(file_id, parts, os.path.basename(path))
     except Exception as e:
-        log.info("Fast upload not possible (%s) - using normal upload", e)
-        if release is not None:
+        retry = release is not None
+        if retry:
             await release(broken=True)
             release = None
-        return None
+        else:
+            log.info("Fast upload not possible (%s) - using normal upload", e)
+            return None
     finally:
         os.close(fd)
         if release is not None:
             await release()
+    # extra connections were cut: upload again on one connection (new file id, 8 parts in flight)
+    return await upload(client, path, progress, pool=False)

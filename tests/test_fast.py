@@ -1,3 +1,4 @@
+import json
 """Parallel big-file transfer against a fake Telegram file server."""
 
 import asyncio
@@ -244,7 +245,8 @@ def test_parallel_downloads_share_one_pool_and_resets_pause_it(tmp_path, monkeyp
             raise ConnectionError("Connection reset by peer")
         return [call] * n, (lambda: asyncio.sleep(0))
     monkeypatch.setattr(fast, "open_pool", dead_pool)
-    assert run(fast.download(srv2, doc_msg(big), str(tmp_path / "x.mp4"))) is None
+    out = run(fast.download(srv2, doc_msg(big), str(tmp_path / "x.mp4")))
+    assert open(out, "rb").read() == data, "same file finished on one connection, not the slow path"
     assert srv2._tgc_pool_off > fast.time.time() + 500
     out = run(fast.download(srv2, doc_msg(big), str(tmp_path / "y.mp4")))
     assert open(out, "rb").read() == data and opened.count("dead") == 1, "paused: one connection"
@@ -275,10 +277,56 @@ def test_pause_grows_and_no_unretrieved_errors(tmp_path, monkeypatch):
         gc.collect()  # asyncio reports unretrieved task errors when tasks are collected
         await asyncio.sleep(0)
         return r
-    assert run(go()) is None, "falls back to the normal download"
+    r = run(go())
+    assert open(r, "rb").read() == data, "finished on one connection"
     assert not errors, "no asyncio errors logged (Telethon's own futures can't be faked here)"
     first = srv._tgc_pool_off - fast.time.time()
     assert 500 < first <= 600
     srv._tgc_pool_off = 0  # pause over, Telegram refuses again -> longer pause
     run(go())
     assert srv._tgc_pool_off - fast.time.time() > 3000, "10 min, then 1 h, then 6 h ..."
+
+
+def test_dropped_extra_connection_error_is_retrieved():
+    """Telethon sets the disconnect error on sender._disconnected; nobody awaits it, so asyncio
+    printed 'Future exception was never retrieved'. _watch consumes it."""
+    import gc
+    from telethon import network
+
+    async def go(watch):
+        errors = []
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(lambda lp, ctx: errors.append(ctx))
+        snd = network.MTProtoSender(None, loggers=fast._QuietLoggers(), auto_reconnect=False)
+        fut = loop.create_future()
+        snd._MTProtoSender__disconnected = fut  # what connect() does
+        if watch:
+            fast._watch(snd)
+        fut.set_exception(asyncio.IncompleteReadError(b"", 8))  # what _disconnect(error) does
+        await asyncio.sleep(0)
+        del snd, fut
+        gc.collect()
+        await asyncio.sleep(0)
+        return errors
+    assert run(go(False)), "without the fix asyncio reports the error (proves the test is real)"
+    assert not run(go(True))
+
+
+def test_pause_is_remembered_across_restarts(tmp_path, monkeypatch):
+    state = tmp_path / "fast_pool.json"
+    monkeypatch.setattr(fast, "_state", {"fails": 0, "off": 0.0})
+    fast.load_state(state)
+    try:
+        c1 = FileServer(b"")
+        fast._broken(c1)
+        fast._broken(c1)  # second transfer on the same broken pool: counted once
+        assert fast._state["fails"] == 1 and json.loads(state.read_text())["fails"] == 1
+        monkeypatch.setattr(fast, "_state", {"fails": 0, "off": 0.0})
+        fast.load_state(state)  # restart: new client, pause still known
+        assert fast._paused(FileServer(b""))
+        fast._state["off"] = 0
+        c2 = FileServer(b"")
+        fast._broken(c2)
+        assert fast._state["off"] - fast.time.time() > 3000, "second reset: longer pause"
+    finally:
+        fast.STATE_FILE = None

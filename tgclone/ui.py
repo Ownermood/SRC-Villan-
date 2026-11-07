@@ -104,7 +104,7 @@ async def main_menu(app: App, intro: str = "") -> Screen:
                  else "<i>💡 Send any post link (<code>t.me/…</code>) to save it.</i>")
     text = "<b>" + "\n\n".join(parts) + "</b>"
     buttons = [
-        [B("🔁 Clone a chat", "cl", "success")],
+        [B("🔁 Clone Channel/Group", "cl", "success")],
         [B("📡 Forwards", "fl:0", "primary"), B("➕ New forward", "na", "primary")],
         [B("📥 Save posts", "sv"), B(f"⏳ Jobs ({len(run)})" if run else "⏳ Jobs", "jl")],
         [B("🧩 Plugins", "pl"), B("⚙️ Settings", "st")],
@@ -389,12 +389,12 @@ def wizard_prompt(kind: str, app: App, data: dict = None) -> Screen:
                 f"Send <b>destination</b> chat(s), one by one. Added:\n{got}",
                 [[B("✅ Done", "nd", "success"), B("✖️ Cancel", "x")]])
     if kind == "clone_src":
-        return ("<b>🔁 Clone a chat · step 1/2</b>\n\nSend the chat to <b>copy from</b>:\n<blockquote>"
+        return ("<b>🔁 Clone Channel/Group · step 1/2</b>\n\nSend the chat to <b>copy from</b>:\n<blockquote>"
                 "• forward any message from it\n• or @username / -100id / t.me link</blockquote>\n"
                 "<i>Every old post is copied (topics too), in order. It continues by itself after a "
                 "restart.</i>", cancel)
     if kind == "clone_dest":
-        return (f"<b>🔁 Clone a chat · step 2/2</b>\n\nFrom: <b>{esc(data['src_title'])}</b>\n\n"
+        return (f"<b>🔁 Clone Channel/Group · step 2/2</b>\n\nFrom: <b>{esc(data['src_title'])}</b>\n\n"
                 "Now send the chat to <b>copy into</b> (forward a message from it, or its "
                 "@username / -100id). Your account must be an admin there.", cancel)
     if kind == "save":

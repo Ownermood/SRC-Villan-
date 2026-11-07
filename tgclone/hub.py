@@ -22,7 +22,7 @@ from telethon.errors import (FloodWaitError, PasswordHashInvalidError, PhoneCode
                              PhoneNumberInvalidError, SessionPasswordNeededError)
 from telethon.sessions import StringSession
 
-from tgclone import __version__, emoji, live, ui
+from tgclone import __version__, emoji, fast, live, ui
 from tgclone.accounts import Accounts, load_key
 from tgclone.app import App
 from tgclone.bot import Panel
@@ -95,6 +95,7 @@ class Hub:
             if not self.secrets.bot_token:
                 raise SystemExit("BOT_TOKEN missing. Run: python -m tgclone setup")
             DATA_DIR.mkdir(parents=True, exist_ok=True)
+            fast.load_state(DATA_DIR / "fast_pool.json")  # remember a Telegram reset across restarts
             self.bot = TelegramClient(str(DATA_DIR / "bot"), self.secrets.api_id,
                                       self.secrets.api_hash, flood_sleep_threshold=60)
             await self.bot.start(bot_token=self.secrets.bot_token)
