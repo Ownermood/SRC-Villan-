@@ -132,3 +132,75 @@ def test_pool_failure_falls_back_to_one_connection(tmp_path, monkeypatch):
     monkeypatch.setattr(fast, "open_pool", broken)
     out = run(fast.download(srv, doc_msg(big), str(tmp_path / "b.mp4")))
     assert open(out, "rb").read() == data and srv.borrowed == srv.returned == 1
+
+
+class FakeNet:
+    """Fake Telethon internals for open_pool: one Telegram DC that checks login imports."""
+
+    def __init__(self):
+        self.exports, self.imports, self.connected = 0, [], 0
+        self.valid = None  # the auth bytes Telegram expects right now
+
+    def client(self):
+        net = self
+
+        class Init:
+            query = None
+
+        class Client:
+            session = _t.SimpleNamespace(dc_id=5, auth_key="HOMEKEY")
+            _log, _proxy, _local_addr = None, None, None
+            _init_request = Init()
+
+            async def _get_dc(self, dc):
+                return _t.SimpleNamespace(ip_address="1.2.3.4", port=443, id=dc)
+
+            def _connection(self, *a, **k):
+                return "conn"
+
+            async def __call__(self, req):  # ExportAuthorizationRequest
+                await asyncio.sleep(0.01)
+                net.exports += 1
+                net.valid = f"bytes{net.exports}".encode()
+                return _t.SimpleNamespace(id=net.exports, bytes=net.valid)
+        return Client()
+
+    def sender_class(self):
+        net = self
+
+        class Sender:
+            def __init__(self, key, loggers=None):
+                self.auth_key = key
+
+            async def connect(self, conn):
+                net.connected += 1
+
+            async def send(self, req):
+                q = req.query.query  # InvokeWithLayer(InitConnection(ImportAuthorization))
+                if q.bytes != net.valid:
+                    raise ValueError("The provided authorization is invalid")
+                net.imports.append(q.id)
+                self.auth_key = f"KEY{q.id}"
+
+            async def disconnect(self):
+                pass
+        return Sender
+
+
+def test_pool_exports_login_once_even_with_parallel_downloads(monkeypatch):
+    """Real log: 3 prefetch downloads exported at once and broke each other's import."""
+    from telethon import network
+    net = FakeNet()
+    monkeypatch.setattr(network, "MTProtoSender", net.sender_class())
+    client = net.client()
+
+    async def go():
+        return await asyncio.gather(*(fast.open_pool(client, 4, 4) for _ in range(3)))
+    pools = run(go())
+    assert net.exports == 1 and net.imports == [1], "one export, one import, shared"
+    assert client._init_request.query is None, "Telethon's shared request is never modified"
+    assert all(len(callers) == 4 for callers, _ in pools)
+    run(fast.open_pool(client, 4, 4))
+    assert net.exports == 1, "the authorised key is remembered"
+    callers, _ = run(fast.open_pool(client, 5, 2))
+    assert len(callers) == 2 and net.exports == 1, "home DC needs no export"

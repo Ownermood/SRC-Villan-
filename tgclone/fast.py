@@ -32,12 +32,38 @@ async def open_pool(client, dc_id: int, n: int):
     ONCE and imported on the first connection; the rest reuse that authorised key.
     Returns (callers, close). Raises if this Telethon can't do it -> caller falls back.
     """
-    from telethon.network import MTProtoSender
+    import copy
+    from telethon import network
     from telethon.tl.alltlobjects import LAYER
     dc = await client._get_dc(dc_id)
     home = dc_id == client.session.dc_id
-    key = client.session.auth_key if home else None
+    keys = client.__dict__.setdefault("_tgc_dc_keys", {})  # dc -> authorised key (exported once)
+    lock = client.__dict__.setdefault("_tgc_pool_lock", asyncio.Lock())
     senders = []
+
+    def new_sender(key):
+        return network.MTProtoSender(key, loggers=client._log)
+
+    async def connect(snd):
+        await snd.connect(client._connection(dc.ip_address, dc.port, dc.id, loggers=client._log,
+                                             proxy=client._proxy, local_addr=client._local_addr))
+
+    async def authorised_key():
+        """Other DC: export the login once (several downloads may ask at the same time)."""
+        async with lock:
+            if dc_id in keys:
+                return keys[dc_id]
+            snd = new_sender(None)
+            await connect(snd)
+            auth = await client(functions.auth.ExportAuthorizationRequest(dc_id))
+            init = copy.copy(client._init_request)  # never touch Telethon's shared request
+            init.query = functions.auth.ImportAuthorizationRequest(id=auth.id, bytes=auth.bytes)
+            await snd.send(functions.InvokeWithLayerRequest(LAYER, init))
+            keys[dc_id] = snd.auth_key
+            senders.append(snd)  # already connected and authorised: use it too
+            return keys[dc_id]
+
+    key = client.session.auth_key if home else None
 
     async def close():
         for snd in senders:
@@ -46,19 +72,16 @@ async def open_pool(client, dc_id: int, n: int):
             except Exception:
                 pass
     try:
-        for _ in range(n):
-            snd = MTProtoSender(key, loggers=client._log)
-            await snd.connect(client._connection(dc.ip_address, dc.port, dc.id, loggers=client._log,
-                                                 proxy=client._proxy, local_addr=client._local_addr))
-            if key is None:
-                auth = await client(functions.auth.ExportAuthorizationRequest(dc_id))
-                client._init_request.query = functions.auth.ImportAuthorizationRequest(
-                    id=auth.id, bytes=auth.bytes)
-                await snd.send(functions.InvokeWithLayerRequest(LAYER, client._init_request))
-                key = snd.auth_key
+        if key is None:
+            key = await authorised_key()
+        while len(senders) < n:
+            snd = new_sender(key)
+            await connect(snd)
             senders.append(snd)
     except Exception:
         await close()
+        if not home:
+            keys.pop(dc_id, None)  # export again next time
         raise
 
     def caller(snd):
@@ -139,12 +162,14 @@ async def download(client, message, path: str,
                 done += len(res.bytes)
                 await _report(progress, min(done, size), size)
 
-        workers = [worker(c) for c in callers for _ in range(per)][:parts]
-        await asyncio.gather(*workers)
+        slots = [c for c in callers for _ in range(per)][:parts]  # callers, not coroutines
+        await asyncio.gather(*(worker(c) for c in slots))
         await _report(progress, size, size)
         return path
     except Exception as e:
         log.info("Fast download not possible (%s) - using normal download", e)
+        if pool_close is not None:  # a stale export: get a fresh one next time
+            client.__dict__.get("_tgc_dc_keys", {}).pop(dc_id, None)
         try:
             os.remove(path)
         except OSError:
@@ -200,7 +225,8 @@ async def upload(client, path: str, progress: Optional[Callable[[int, int], None
                 done += len(data)
                 await _report(progress, min(done, size), size)
 
-        await asyncio.gather(*[worker(c) for c in callers for _ in range(per)][:parts])
+        slots = [c for c in callers for _ in range(per)][:parts]
+        await asyncio.gather(*(worker(c) for c in slots))
         return types.InputFileBig(file_id, parts, os.path.basename(path))
     except Exception as e:
         log.info("Fast upload not possible (%s) - using normal upload", e)
