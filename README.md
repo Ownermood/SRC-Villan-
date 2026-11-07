@@ -49,6 +49,7 @@ Moving to a VPS: copy `.env` and `data/` (without `data/downloads/`), and never 
 **Plans & admin (owner only, red 🛡 Admin panel button)**
 - Every new user gets a free trial (default 24h). **💎 Go Premium** shows the plans and prices you set (`7=₹49, 30=₹149, …`). A tap sends you a request with a one-tap **✅ Grant** button, and the user sees your payment info.
 - Users: approve / ban / force logout, add 1/7/30 days, remove premium. You can also use `/addpremium <id|@user> <days>` and `/rmpremium <id>`.
+- 👮 **Admins**: add helpers by id / @username. They can approve, ban and log out users, give or remove premium, block chats and see stats; settings, plans and admins stay with you. They can't touch you or another admin, and 📜 Activity shows who did what.
 - 📊 **Bot stats · live**: users, plans, jobs and transfer speed right now, totals since start, CPU / RAM / disk. Refreshes itself every 5 s for 2 min.
 - 🚫 Blocked chats: block by folder link `t.me/addlist/…`, `@username`, `t.me/c/…`, invite `t.me/+…` (only once you have joined it), `-100…` id or a forwarded message. A folder shows as one button with its name; inside are its chats and a red **Remove whole folder**. The owner is never blocked.
 - Access mode (open / approval / only me). Jobs at once: free trial 1 and premium 3 (e.g. a channel, a group and a topics group together), both adjustable.

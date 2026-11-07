@@ -126,7 +126,7 @@ async def main_menu(app: App, intro: str = "") -> Screen:
         [B("🧩 Plugins", "pl"), B("⚙️ Settings", "st")],
         [B("👤 My profile", "ac") if hub is not None else B("📊 Status", "noop"), B("❔ Help", "hp")],
     ]
-    if hub is not None and app.uid == hub.owner:
+    if hub is not None and getattr(hub, "is_admin", lambda u: u == hub.owner)(app.uid):
         buttons.append([B("🛡 Admin panel", "ad", "danger")])
     buttons.append([B("🔄 Refresh", "m")])
     return text, buttons
@@ -738,7 +738,9 @@ def admin_screen(fn):
 
 
 @admin_screen
-def admin_view(hub) -> Screen:
+def admin_view(hub, viewer: int = 0) -> Screen:
+    if viewer and viewer != hub.owner:
+        return _subadmin_view(hub)
     st, c = hub.settings, hub.acc.counts()
     running = sum(len(app.jobs.running()) for app, _ in hub.ws.values())
     up = int(_time.time() - hub.started)
@@ -759,9 +761,60 @@ def admin_view(hub) -> Screen:
         [_a("🔐 Access", "aac"), _a("⚙️ Limits", "alm")],
         [_a("🖼 Start photo", "asp"), _a(f"⭐ Premium emoji: {'on' if st.premium_emoji else 'off'}", "aem")],
         [_a("✏️ Start text", "ast"), _a("🔍 Test premium emoji", "aet")],
+        [_a(f"👮 Admins ({len(hub.acc.admins())})", "adA")],
         [B("🔄 Refresh", "ad"), B("« Back", "m")],
     ]
     return text, rows
+
+
+def _subadmin_view(hub) -> Screen:
+    c = hub.acc.counts()
+    running = sum(len(app.jobs.running()) for app, _ in hub.ws.values())
+    text = ("<b>🛡 Admin panel</b> · <i>👮 admin</i>\n\n<blockquote>"
+            f"👥 <b>Users</b> · {c['users']} logged in · {c['botmode']} without login · {len(hub.ws)} online\n"
+            f"💎 <b>Premium</b> · {c['premium']} premium\n"
+            f"⏳ <b>Jobs</b> · {running} running\n"
+            f"📬 <b>Requests</b> · {c['pending']} waiting · {c['banned']} banned\n"
+            f"🚫 <b>Blocked chats</b> · {c['blocked']}</blockquote>\n"
+            "<i>You can manage users, premium and blocked chats. Settings stay with the owner.</i>")
+    rows = [
+        [_a("👥 Users", "adu:0"), _a(f"📬 Requests ({c['pending']})", "adp")],
+        [B("📊 Bot stats · live", "abs", "success")],
+        [_a("💎 Premium", "apm"), _a("🚫 Blocked chats", "abl")],
+        [B("🔄 Refresh", "ad"), B("« Back", "m")],
+    ]
+    return text, rows
+
+
+@admin_screen
+def admin_admins(hub, note: str = "") -> Screen:
+    items = hub.acc.admins()
+    rows = [[B(f"❌ {(a['name'] or str(a['uid']))[:22]} · {a['uid']}", f"adR:{a['uid']}")] for a in items]
+    rows.append([B("➕ Add admin", "adA:add", "success")])
+    rows.append([_a("📜 Activity", "adG")])
+    rows.append([B("« Admin", "ad")])
+    text = (f"<b>👮 Admins</b> · {len(items)}\n\n<blockquote>"
+            "✅ Can: approve / ban / log out users, give / remove premium, block / unblock chats, "
+            "see 📊 Bot stats\n"
+            "🔒 Only you: admins, access mode, limits, plans & payment, start photo / text, "
+            "premium emoji, extra connections</blockquote>\n"
+            "<i>An admin can't ban or change you or another admin. Tap ❌ to remove one.</i>")
+    if note:
+        text += f"\n\n{note}"
+    return text, rows
+
+
+@admin_screen
+def admin_activity(hub) -> Screen:
+    items = hub.acc.recent_actions(15)
+    if not items:
+        body = "No admin actions yet."
+    else:
+        body = "\n".join(f"• <code>{_time.strftime('%d %b %H:%M', _time.localtime(a['t']))}</code> "
+                         f"<b>{esc(hub.acc.name_of(a['uid']) or a['uid'])}</b> {esc(a['text'])}"
+                         for a in items)
+    return (f"<b>📜 Activity</b> · last {len(items)}\n\n<blockquote expandable>{body}</blockquote>",
+            [[B("🔄 Refresh", "adG")], [B("« Admins", "adA")]])
 
 
 def _server() -> dict:
@@ -955,7 +1008,7 @@ def admin_premium_list(hub, page: int = 0) -> Screen:
 
 @admin_screen
 def admin_prompt(kind: str) -> Screen:
-    back = {"premium": "apm", "rmpremium": "apm", "block": "abl", "photo": "asp", "start": "ad",
+    back = {"premium": "apm", "rmpremium": "apm", "block": "abl", "photo": "asp", "start": "ad", "addadmin": "adA",
             "plans": "apm", "pay": "apm"}[kind]
     texts = {
         "premium": "<b>➕ Give premium</b>\n\nSend <code>user_id days</code> or <code>@username days</code>.\n"
@@ -971,6 +1024,8 @@ def admin_prompt(kind: str) -> Screen:
         "pay": "<b>💳 Payment info</b>\n\nWhat users see after choosing a plan — UPI id, payment "
                "link, bank details…\nExample: <code>UPI: yourname@upi</code>\nSend <code>-</code> to clear.",
         "rmpremium": "<b>➖ Remove premium</b>\n\nSend the <code>user_id</code> or <code>@username</code>.",
+        "addadmin": "<b>👮 Add admin</b>\n\nSend their <code>user_id</code> or <code>@username</code>.\n"
+                    "<i>They should /start the bot first, so I can message them.</i>",
         "block": "<b>🚫 Block a chat</b>\n\nSend any of these — users won't be able to clone it:\n<blockquote>"
                  "📁 folder link <code>t.me/addlist/…</code> (blocks every chat in it)\n"
                  "🔗 <code>@username</code> or <code>t.me/username</code>\n"

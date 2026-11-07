@@ -7,6 +7,7 @@ Each user's files live in data/users/<uid>/; logins are stored encrypted (accoun
 """
 
 import asyncio
+import contextvars
 import io
 import json
 import logging
@@ -43,7 +44,11 @@ HUB_CALLBACKS = {"lg", "hw", "otp", "ac", "lo", "LO", "LD", "bm", "bx", "gp", "b
                  "adp3",
                  "ad", "adm", "adu", "adv", "adb", "adl", "adp", "adj", "adx", "adt", "ap", "dn",
                  "apm", "apg", "apr", "apl", "atr", "apt", "apa", "apx", "abl", "abk", "aub", "abf", "abF", "abs",
-                 "aac", "alm", "axc", "asp", "aps", "apd", "aem", "aet"}
+                 "aac", "alm", "axc", "adA", "adR", "adG", "asp", "aps", "apd", "aem", "aet"}
+# sub-admins may use these; everything else in the admin panel is owner only
+ADMIN_KEYS = {"ad", "abs", "adu", "adv", "adb", "adl", "adp", "ap", "dn", "apm", "apg", "apr", "apl",
+              "apa", "apx", "prd", "abl", "abk", "aub", "abf", "abF", "noop"}
+_actor: contextvars.ContextVar = contextvars.ContextVar("tgclone_actor", default=0)  # who pressed / typed
 # reachable while a plan is expired (profile, logout, help, get premium)
 EXPIRED_OK = {"ac", "lo", "LO", "LD", "gp", "bp", "hw", "bx", "otp", "lg", "noop"}
 BOT_COMMANDS = {"start": "Open the control panel", "profile": "Plan, account, logout",
@@ -77,7 +82,7 @@ class Hub:
         self.owner = self.secrets.owner_id or next(
             (int(a) for a in self.secrets.admins if a.lstrip("-").isdigit()), 0)
         self.started = time.time()
-        self.admin_wait: Optional[dict] = None  # owner is typing a value for an admin tool
+        self._admin_waits: Dict[int, dict] = {}  # owner / admin is typing a value for an admin tool
         self.restoring: set = set()  # users whose saved login is still being loaded at start
         self._bot_handlers: Dict[int, list] = {}  # bot-only users' live handlers on the shared bot
         self._start_media = None  # cached uploaded start photo
@@ -635,14 +640,15 @@ class Hub:
         return True
 
     async def on_command(self, event) -> None:
+        _actor.set(event.sender_id)
         if not await self._gate(event):
             raise events.StopPropagation
         uid = event.sender_id
         name = event.pattern_match.group(1)
         args = (event.pattern_match.group(2) or "").strip()
         ws = self.ws.get(uid)
-        if name == "cancel" and (uid in self.logins or (uid == self.owner and self.admin_wait)):
-            self.admin_wait = None if uid == self.owner else self.admin_wait
+        if name == "cancel" and (uid in self.logins or (self.is_admin(uid) and self.admin_wait)):
+            self.admin_wait = None
             await self._drop_login(uid)
             await event.respond("❌ Cancelled.", buttons=Button.clear())
             raise events.StopPropagation
@@ -662,11 +668,12 @@ class Hub:
         raise events.StopPropagation
 
     async def on_callback(self, event) -> None:
+        _actor.set(event.sender_id)
         if not await self._gate(event):
             raise events.StopPropagation
         uid = event.sender_id
         key = event.data.decode().split(":", 1)[0]
-        if uid == self.owner and key != "abs":
+        if key != "abs" and self.is_admin(uid):
             self._stop_stats()  # left the stats screen: stop its live refresh
         ws = self.ws.get(uid)
         if ws and key not in EXPIRED_OK and not self.plan_ok(uid):
@@ -680,10 +687,11 @@ class Hub:
         raise events.StopPropagation
 
     async def on_text(self, event) -> None:
+        _actor.set(event.sender_id)
         if not await self._gate(event):
             raise events.StopPropagation
         uid = event.sender_id
-        if uid == self.owner and self.admin_wait:
+        if self.admin_wait and self.is_admin(uid):
             await self._run(event, self.admin_text(event))
         elif uid in self.logins:
             await self._run(event, self.login_text(event))
@@ -709,20 +717,21 @@ class Hub:
     # ============================================================ hub commands
     async def hub_command(self, event, name: str, args: str) -> None:
         uid = event.sender_id
-        if name in OWNER_CMDS and uid != self.owner:
+        if name in OWNER_CMDS and not self.is_admin(uid):
             return await event.respond("🚫 Owner only.")
         if name == "login":
             return await self.begin_login(event)
         if name in ("logout", "account", "profile"):
             return await self._show(event, ui.profile_view(self, uid))
         if name == "admin":
-            return await self._show(event, ui.admin_view(self))
+            return await self._show(event, ui.admin_view(self, _actor.get()))
         if name == "addpremium":
             target, days = await self._parse_user_days(args)
             return await self._grant(event, target, days)
         if name == "rmpremium":
             target, _ = await self._parse_user_days(args, need_days=False)
             self.remove_plan(target)
+            self._log(f"removed premium of {self._who(target)}")
             await self._notify(target, "➖ Your premium was removed by the owner.")
             return await event.respond(f"➖ Premium removed for {target}.")
         if name == "block":
@@ -733,8 +742,21 @@ class Hub:
         if name == "unblock":
             cid = await self.resolver().get_peer_id(ui.chat_from_text(args))
             self.acc.unblock(cid)
+            self._log(f"unblocked chat {cid}")
             await self._reload_all_forwards()
             return await event.respond(f"✅ Unblocked {cid}.")
+
+    def _who(self, uid: int) -> str:
+        name = self.acc.name_of(uid)
+        return f"{name} ({uid})" if name else str(uid)
+
+    async def _name_from_telegram(self, uid: int) -> str:
+        try:
+            ent = await self.bot.get_entity(uid)
+            return " ".join(filter(None, [getattr(ent, "first_name", ""), getattr(ent, "last_name", "")])) \
+                or getattr(ent, "username", "") or str(uid)
+        except Exception:
+            return str(uid)
 
     async def _parse_user_days(self, text: str, need_days: bool = True) -> Tuple[int, float]:
         parts = text.replace(",", " ").split()
@@ -765,6 +787,7 @@ class Hub:
     async def _grant(self, event, uid: int, days: float, edit: bool = False):
         expires = self.add_days(uid, days)
         name = self.acc.name_of(uid) or uid
+        self._log(f"gave {days:g} days premium to {self._who(uid)}")
         await self._notify(uid, f"🎉 <b>Premium activated!</b> +{days:g} days\n"
                                 f"⏰ Valid until <b>{ui.when(expires)}</b>. Enjoy!")
         text = (f"💎 <b>{ui.esc(name)}</b> (<code>{uid}</code>) +{days:g} days\n"
@@ -776,6 +799,8 @@ class Hub:
         targets = await self.block_targets(msg)
         for cid, title, folder, fname in targets:
             self.acc.block(cid, title, folder, fname)
+        self._log(f"blocked folder {targets[0][3]} ({len(targets)} chats)" if targets and targets[0][2]
+                  else "blocked " + ", ".join(t for _, t, _, _ in targets[:3]))
         await self._reload_all_forwards()
         names = "\n".join(f"• {ui.esc(t)} <code>{c}</code>" for c, t, _, _ in targets[:15])
         more = f"\n…and {len(targets) - 15} more" if len(targets) > 15 else ""
@@ -841,6 +866,19 @@ class Hub:
             self.acc.save_settings(self.settings)
             self.admin_wait = None
             return await self._show(event, ui.admin_premium(self))
+        if kind == "addadmin":
+            target, _ = await self._parse_user_days(msg.raw_text or "", need_days=False)
+            if target == self.owner:
+                raise ValueError("You are the owner already.")
+            if self.acc.access(target) == "banned":
+                raise ValueError("This user is banned. Unban them first.")
+            name = self.acc.name_of(target) or await self._name_from_telegram(target)
+            self.acc.add_admin(target, name)
+            self.admin_wait = None
+            self._log(f"made {self._who(target)} an admin")
+            await self._notify(target, "👮 <b>You are now an admin</b> of this bot.\n"
+                                       "Open it with /admin (users, premium, blocked chats, stats).")
+            return await self._show(event, ui.admin_admins(self, f"✅ {ui.esc(name)} is now an admin."))
         if kind == "block":
             await self._block_from(event, msg)
             self.admin_wait = None
@@ -904,10 +942,39 @@ class Hub:
             shutil.rmtree(self.home(uid), ignore_errors=True)
             await event.answer("🗑 Deleted")
             return await self.show_welcome(event, edit=True)
-        # ---------------- owner only below
-        if uid != self.owner:
-            return await event.answer("🚫 Owner only", alert=True)
-        return await self.admin_callback(event, k, parts)
+        # ---------------- owner (everything) and sub-admins (ADMIN_KEYS) below
+        if uid == self.owner or (k in ADMIN_KEYS and self.is_admin(uid)):
+            if len(parts) > 1 and k in ("adb", "adl", "apa", "apx") and parts[1].lstrip("-").isdigit() \
+                    and self._protected(int(parts[1])):
+                return await event.answer("🚫 Only the owner can do this to an admin", alert=True)
+            return await self.admin_callback(event, k, parts)
+        return await event.answer("🚫 Owner only", alert=True)
+
+    @property
+    def admin_wait(self) -> Optional[dict]:
+        """What the current owner / admin (the one who pressed or typed) is asked to send."""
+        return self._admin_waits.get(_actor.get())
+
+    @admin_wait.setter
+    def admin_wait(self, value: Optional[dict]) -> None:
+        if value is None:
+            self._admin_waits.pop(_actor.get(), None)
+        else:
+            self._admin_waits[_actor.get()] = value
+
+    def is_admin(self, uid: int) -> bool:
+        return bool(uid) and (uid == self.owner or uid in self.acc.admin_ids())
+
+    def _log(self, text: str) -> None:
+        """Admin activity log (who did what) - shown to the owner in 👮 Admins."""
+        try:
+            self.acc.log_action(_actor.get(), text)
+        except Exception as e:
+            log.info("admin log: %s", e)
+
+    def _protected(self, target: int) -> bool:
+        """A sub-admin can't ban / log out / change the owner or another admin."""
+        return _actor.get() != self.owner and self.is_admin(target)
 
     STATS_EVERY, STATS_FOR = 5, 120  # live stats: refresh every 5 s for 2 min
 
@@ -949,7 +1016,7 @@ class Hub:
                 app.caps = self.caps(u)
 
         if k == "ad":
-            return await show(ui.admin_view(self))
+            return await show(ui.admin_view(self, _actor.get()))
         if k == "abs":
             await show(ui.admin_stats(self))
             return self._live_stats(await event.get_message())
@@ -961,6 +1028,20 @@ class Hub:
             return await show(ui.admin_access(self))
         if k == "alm":
             return await show(ui.admin_limits(self))
+        if k == "adA":  # 👮 admins (owner only)
+            if len(parts) > 1 and parts[1] == "add":
+                self.admin_wait = {"kind": "addadmin"}
+                return await show(ui.admin_prompt("addadmin"))
+            return await show(ui.admin_admins(self))
+        if k == "adR":
+            target = int(parts[1])
+            self.acc.remove_admin(target)
+            self._log(f"removed admin {self._who(target)}")
+            await self._notify(target, "👮 You are no longer an admin of this bot.")
+            await event.answer("Removed")
+            return await show(ui.admin_admins(self))
+        if k == "adG":
+            return await show(ui.admin_activity(self))
         if k == "axc":
             st.extra_connections = fast.ENABLED = not st.extra_connections
             save()
@@ -988,7 +1069,7 @@ class Hub:
             st.premium_emoji = not st.premium_emoji
             emoji.set_enabled(st.premium_emoji)
             save()
-            return await show(ui.admin_view(self))
+            return await show(ui.admin_view(self, _actor.get()))
         # premium
         if k == "apm":
             return await show(ui.admin_premium(self))
@@ -1009,6 +1090,7 @@ class Hub:
             return await show(ui.admin_prompt(self.admin_wait["kind"]))
         if k == "prd":
             target = int(parts[1])
+            self._log(f"declined premium request of {self._who(target)}")
             await self._notify(target, "❌ Your premium request was declined. Message the owner "
                                        "if you think this is a mistake.")
             await event.answer("Declined")
@@ -1023,6 +1105,7 @@ class Hub:
         if k == "apx":
             target = int(parts[1])
             self.remove_plan(target)
+            self._log(f"removed premium of {self._who(target)}")
             await self._notify(target, "➖ Your premium was removed by the owner.")
             return await show(ui.admin_user(self, target))
         # blocked chats
@@ -1032,7 +1115,9 @@ class Hub:
             self.admin_wait = {"kind": "block"}
             return await show(ui.admin_prompt("block"))
         if k == "aub":
+            title = next((b["title"] for b in self.acc.blocked() if b["chat_id"] == int(parts[1])), parts[1])
             self.acc.unblock(int(parts[1]))
+            self._log(f"unblocked {title}")
             await self._reload_all_forwards()
             await event.answer("✅ Unblocked")
             if len(parts) > 2 and any(b["folder"] == parts[2] for b in self.acc.blocked()):
@@ -1041,7 +1126,9 @@ class Hub:
         if k == "abf":
             return await show(ui.admin_folder(self, parts[1], int(parts[2]) if len(parts) > 2 else 0))
         if k == "abF":
+            fname = next((b["fname"] for b in self.acc.blocked() if b["folder"] == parts[1]), parts[1])
             n = self.acc.unblock_folder(parts[1])
+            self._log(f"removed blocked folder {fname} ({n} chats)")
             await self._reload_all_forwards()
             await event.answer(f"✅ Folder removed · {n} chat(s) unblocked")
             return await show(ui.admin_blocked(self))
@@ -1067,8 +1154,11 @@ class Hub:
                 return await event.answer("You can't ban yourself", alert=True)
             if self.acc.access(target) == "banned":
                 self.acc.set_access(target, None)
+                self._log(f"unbanned {self._who(target)}")
                 await self._notify(target, "✅ You can use the bot again. /start")
             else:
+                self._log(f"banned {self._who(target)}")
+                self.acc.remove_admin(target)  # a banned user is no admin any more
                 self.acc.set_access(target, "banned", self.acc.name_of(target))
                 await self.close_workspace(target, logout=True)
                 await self._drop_login(target)
@@ -1076,6 +1166,7 @@ class Hub:
         if k == "adl":
             target = int(parts[1])
             await self.close_workspace(target, logout=True)
+            self._log(f"logged out {self._who(target)}")
             await self._notify(target, "🚪 You were logged out by the owner.")
             return await show(ui.admin_user(self, target))
         if k == "adp":
@@ -1083,6 +1174,7 @@ class Hub:
         if k in ("ap", "dn"):
             target = int(parts[1])
             self.acc.set_access(target, "approved" if k == "ap" else None)
+            self._log(f"{'approved' if k == 'ap' else 'declined'} access of {self._who(target)}")
             if k == "ap":
                 await self._notify(target, "✅ <b>Access approved!</b> Tap below to start.",
                                    [[ui.B("🔐 Login with Telegram", "lg", "success")],

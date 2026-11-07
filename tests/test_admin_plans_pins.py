@@ -137,13 +137,13 @@ def test_admin_premium_wizard_and_username(hubenv):
     hub = hubenv.new_hub()
     login(hub, OWNER, "+91000000001", env=hubenv)
     press(hub, "apg", OWNER)
-    assert hub.admin_wait == {"kind": "premium"}
+    assert hub._admin_waits.get(OWNER) == {"kind": "premium"}
     ev = say(hub, "@rahul 7", OWNER)
     assert hub.plan_status(5021)["kind"] == "premium" and "+7 days" in ev.out[-1][0]
-    assert hub.admin_wait is None
+    assert OWNER not in hub._admin_waits
     press(hub, "apg", OWNER)
     ev = say(hub, "abc", OWNER)
-    assert "user_id days" in ev.out[-1][0] and hub.admin_wait, "bad input keeps asking"
+    assert "user_id days" in ev.out[-1][0] and hub._admin_waits.get(OWNER), "bad input keeps asking"
     press(hub, "apa:5021:1", OWNER)
     assert hub.plan_status(5021)["left"] > 7.9 * 86400
 
@@ -399,3 +399,49 @@ def test_extra_connections_switch_in_limits(hubenv):
     assert hub.acc.settings().extra_connections is False, "saved"
     press(hub, "axc", OWNER)
     assert fast.ENABLED is True
+
+
+def test_sub_admins(hubenv):
+    hub = hubenv.new_hub()
+    login(hub, OWNER, "+91000000001", env=hubenv)
+    login(hub, 5, "+91000000005", env=hubenv)
+    login(hub, 6, "+91000000006", env=hubenv)
+    login(hub, 7, "+91000000007", env=hubenv)
+    # not an admin yet
+    ev = press(hub, "ad", 5)
+    assert ev.answers and "Owner only" in ev.answers[-1][0]
+    # owner adds 5 as admin
+    ev = press(hub, "adA", OWNER)
+    assert "adA:add" in datas(ev.edits[-1][1])
+    press(hub, "adA:add", OWNER)
+    ev = say(hub, "5", OWNER)
+    assert 5 in hub.acc.admin_ids() and "now an admin" in ev.out[-1][0]
+    assert any(c[0] == 5 and "now an admin" in c[1] for c in hub.bot.sent), "admin is told"
+    # admin: own panel, main menu button, allowed tools only
+    ev = say(hub, "/start", 5)
+    assert "ad" in datas(ev.out[-1][1]), "admin panel button in the menu"
+    ev = press(hub, "ad", 5)
+    assert "👮 admin" in ev.edits[-1][0] and "alm" not in datas(ev.edits[-1][1])
+    for key in ("alm", "aac", "adA", "ast", "axc", "adm:open"):
+        ev = press(hub, key, 5)
+        assert ev.answers and "Owner only" in ev.answers[-1][0], key
+    press(hub, "apa:6:7", 5)
+    assert hub.plan_status(6)["kind"] == "premium", "admin can give premium"
+    press(hub, "adb:7", 5)
+    assert hub.acc.access(7) == "banned", "admin can ban a user"
+    ev = press(hub, "adb:%d" % OWNER, 5)
+    assert "Only the owner" in ev.answers[-1][0] and hub.acc.access(OWNER) != "banned"
+    # admin's typed input does not mix with the owner's
+    press(hub, "apg", 5)
+    press(hub, "abk", OWNER)
+    assert hub._admin_waits[5] == {"kind": "premium"} and hub._admin_waits[OWNER] == {"kind": "block"}
+    say(hub, "6 3", 5)
+    assert 5 not in hub._admin_waits and hub._admin_waits[OWNER] == {"kind": "block"}
+    # activity log + removal
+    ev = press(hub, "adG", OWNER)
+    log = ev.edits[-1][0]
+    assert "gave 7 days premium" in log and "banned" in log and "made" in log
+    press(hub, "adR:5", OWNER)
+    assert 5 not in hub.acc.admin_ids()
+    ev = press(hub, "ad", 5)
+    assert "Owner only" in ev.answers[-1][0], "removed admin loses access"

@@ -63,6 +63,8 @@ class Accounts:
                 notified INTEGER DEFAULT 0);
             CREATE TABLE IF NOT EXISTS blocked(chat_id INTEGER PRIMARY KEY, title TEXT, added REAL);
             CREATE TABLE IF NOT EXISTS botmode(uid INTEGER PRIMARY KEY, name TEXT, created REAL);
+            CREATE TABLE IF NOT EXISTS admins(uid INTEGER PRIMARY KEY, name TEXT, added REAL);
+            CREATE TABLE IF NOT EXISTS admin_log(t REAL, uid INTEGER, text TEXT);
             """
         )
         for col in ("folder", "fname"):  # older databases: chats blocked from a folder link
@@ -195,6 +197,31 @@ class Accounts:
             if row and row[0]:
                 return row[0]
         return ""
+
+    # ---------------------------------------------------------- sub-admins
+    def add_admin(self, uid: int, name: str) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO admins VALUES (?,?,?)", (uid, name, time.time()))
+
+    def remove_admin(self, uid: int) -> None:
+        with self.db:
+            self.db.execute("DELETE FROM admins WHERE uid=?", (uid,))
+
+    def admins(self) -> List[dict]:
+        rows = self.db.execute("SELECT uid, name, added FROM admins ORDER BY added")
+        return [{"uid": u, "name": n or "", "added": a} for u, n, a in rows]
+
+    def admin_ids(self) -> set:
+        return {r[0] for r in self.db.execute("SELECT uid FROM admins")}
+
+    def log_action(self, uid: int, text: str) -> None:
+        with self.db:
+            self.db.execute("INSERT INTO admin_log VALUES (?,?,?)", (time.time(), uid, text[:300]))
+            self.db.execute("DELETE FROM admin_log WHERE t < ?", (time.time() - 30 * 86400,))
+
+    def recent_actions(self, limit: int = 15) -> List[dict]:
+        rows = self.db.execute("SELECT t, uid, text FROM admin_log ORDER BY t DESC LIMIT ?", (limit,))
+        return [{"t": t, "uid": u, "text": x} for t, u, x in rows]
 
     def new_since(self, ts: float) -> int:
         return sum(self.db.execute(f"SELECT COUNT(*) FROM {t} WHERE created>?", (ts,)).fetchone()[0]
