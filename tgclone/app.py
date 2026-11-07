@@ -436,12 +436,18 @@ async def run_forward(app: App, fwd: Forward, fresh: bool = False,
     async def prepare(msgs):
         tms = await app.process(msgs)
         if tms and (src in PROTECTED_CHATS or any(m.noforwards for m in msgs)) and cfg.protected_fallback:
-            for tm in tms:  # download now, upload later (overlaps with the previous upload)
+            for tm in tms:  # download now (overlaps with the previous upload)
                 if tm.file_type in FILE_TYPES:
                     try:
                         await tm.download(cfg.max_file_mb, cfg.max_disk_mb, progress)
                     except Exception as e:
                         log.debug("prefetch %s: %s", tm.message.id, e)
+            if p.preupload and not cfg.send_via_bot:
+                for tm in tms:  # ...and upload ahead too: sending is then only attaching the file
+                    try:
+                        await tm.preupload(app.sender, progress)
+                    except Exception as e:
+                        log.debug("pre-upload %s: %s", tm.message.id, e)
         return tms
 
     async def send_next() -> None:

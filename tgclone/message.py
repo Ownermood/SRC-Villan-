@@ -93,6 +93,26 @@ class CloneMessage:
         self._downloaded: Optional[str] = None
         self._lock: Optional[asyncio.Lock] = None
         self._temp: List[str] = []
+        self._handles: dict = {}  # client -> file uploaded ahead of time (prefetch)
+
+    async def preupload(self, client, progress=None) -> None:
+        """Upload the downloaded document now, while the previous post is still being sent.
+        One pre-upload per account at a time; the send step then only attaches it."""
+        doc = self.message.document
+        path = self._downloaded
+        if doc is None or self.new_file or not path or id(client) in self._handles \
+                or not os.path.exists(path) or os.path.getsize(path) <= fast.SMALL_UPLOAD:
+            return
+        lock = client.__dict__.setdefault("_tgc_preupload", asyncio.Semaphore(1))
+        up = (lambda c, t: progress("up", c, t)) if progress else None
+        async with lock:
+            handle = await fast.upload(client, path, up)
+        if handle is not None:
+            self._handles[id(client)] = handle
+
+    def take_handle(self, client):
+        """The pre-uploaded file, once (a second destination uploads its own copy)."""
+        return self._handles.pop(id(client), None)
 
     @property
     def text_changed(self) -> bool:
@@ -200,8 +220,8 @@ async def _uploaded_doc(client: TelegramClient, tm: CloneMessage, path: str,
                         thumb: Optional[str], up) -> types.InputMediaUploadedDocument:
     """Pre-uploaded document with our thumbnail (send_file can't set thumbs in albums)."""
     doc = tm.message.document
-    handle = await fast.upload(client, path, up) or \
-        await retry(client.upload_file, path, progress_callback=up)
+    handle = (tm.take_handle(client) if path == tm._downloaded else None) or \
+        await fast.upload(client, path, up) or await retry(client.upload_file, path, progress_callback=up)
     thumb_h = await retry(client.upload_file, thumb) if thumb else None
     mime = getattr(doc, "mime_type", None) or mimetypes.guess_type(path)[0] \
         or "application/octet-stream"
@@ -339,8 +359,8 @@ async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
             kw["thumb"] = thumb
         jobs.stage(f"⬆️ Uploading post {pid}")
         cap, cap_ents = (("", None) if split_caption else (text, ents))
-        if msg.document is not None and os.path.getsize(path) > 10 * 1024 * 1024:
-            # big document: fast parallel upload, original attributes kept
+        if msg.document is not None and os.path.getsize(path) > fast.SMALL_UPLOAD:
+            # document > 1 MB: part-parallel upload (or the pre-uploaded one), attributes kept
             media = await _uploaded_doc(client, tm, path, thumb, up)
             sent = _as_list(await retry(client.send_file, dest, media, caption=cap,
                                         formatting_entities=cap_ents, reply_to=reply_to,

@@ -7,6 +7,7 @@ returns None and the caller falls back to Telethon's normal transfer.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -27,7 +28,9 @@ POOL_SIZE = 10 * 1024 * 1024  # use extra connections from this size
 IDLE_CLOSE = 60  # seconds an unused shared pool stays open
 PAUSE_AFTER_RESET = 600  # Telegram cut our extra connections: one connection for 10 min
 MAX_PAUSE = 7 * 24 * 3600  # after repeated resets: extra connections stay off for a week
-MIN_SIZE = 2 * 1024 * 1024  # smaller files: normal transfer is fine
+MIN_SIZE = 1024 * 1024  # smaller files: one part, nothing to run in parallel
+SMALL_UPLOAD = 1024 * 1024  # documents above this are uploaded part-parallel (incl. 1-10 MB)
+BIG_FILE = 10 * 1024 * 1024  # Telegram: above this saveBigFilePart, below saveFilePart + MD5
 ENABLED = True  # owner switch (Admin -> Limits): False = never open extra connections
 STATE_FILE = None  # set by the hub: remembers the pause across restarts (same network/IP)
 _state = {"fails": 0, "off": 0.0}
@@ -341,12 +344,22 @@ async def download(client, message, path: str,
     return await download(client, message, path, progress, pool=False)
 
 
+def _md5(path: str) -> str:
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 async def upload(client, path: str, progress: Optional[Callable[[int, int], None]] = None,
                  pool: bool = True):
-    """Parallel upload. Returns an InputFileBig, or None to use the normal upload."""
+    """Parallel upload. Returns InputFileBig (> 10 MB) / InputFile (1-10 MB), or None to use the
+    normal upload."""
     size = os.path.getsize(path)
-    if size <= 10 * 1024 * 1024:  # Telegram wants small files uploaded with MD5 parts
+    if size <= SMALL_UPLOAD:
         return None
+    big = size > BIG_FILE
     parts = (size + PART - 1) // PART
     file_id = random.getrandbits(63)
     queue: asyncio.Queue = asyncio.Queue()
@@ -373,7 +386,8 @@ async def upload(client, path: str, progress: Optional[Callable[[int, int], None
                 except asyncio.QueueEmpty:
                     return
                 data = os.pread(fd, PART, i * PART)
-                req = functions.upload.SaveBigFilePartRequest(file_id, i, parts, data)
+                req = (functions.upload.SaveBigFilePartRequest(file_id, i, parts, data) if big
+                       else functions.upload.SaveFilePartRequest(file_id, i, data))
                 for attempt in range(5):
                     try:
                         if not await call(req):
@@ -388,7 +402,9 @@ async def upload(client, path: str, progress: Optional[Callable[[int, int], None
 
         slots = [c for c in callers for _ in range(per)][:parts]
         await _run_all(worker, slots)
-        return types.InputFileBig(file_id, parts, os.path.basename(path))
+        if big:
+            return types.InputFileBig(file_id, parts, os.path.basename(path))
+        return types.InputFile(file_id, parts, os.path.basename(path), _md5(path))
     except Exception as e:
         retry = release is not None
         if retry:

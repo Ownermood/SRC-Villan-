@@ -101,6 +101,7 @@ class PastSettings(BaseModel):
     delay: float = Field(0, ge=0, le=300)  # extra pause after every post (FloodWait is handled anyway)
     turbo: bool = True  # plain posts: copy 100 per request server-side (no download)
     prefetch: int = Field(3, ge=0, le=10)  # protected chats: files downloaded ahead
+    preupload: bool = True  # protected chats: next file uploaded while the current one is sent
     batch_size: int = Field(0, ge=0)  # extra pause after N messages (0 = off)
     batch_sleep: float = Field(0, ge=0)
 

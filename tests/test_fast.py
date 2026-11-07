@@ -379,3 +379,44 @@ def test_extra_connections_switch_and_quiet_wrong_session_log(tmp_path, monkeypa
         lg.warning("something else")
     msgs = [r.getMessage() for r in caplog.records if r.name == "telethon.network.mtprotosender"]
     assert len(msgs) == 2 and "harmless" in msgs[0] and msgs[1] == "something else"
+
+
+def test_mid_size_upload_is_parallel_with_md5(tmp_path):
+    import hashlib
+    data = os.urandom(3 * 1024 * 1024 + 5)  # 1-10 MB: saveFilePart, parallel, InputFile + MD5
+    f = tmp_path / "mid.bin"
+    f.write_bytes(data)
+    srv = FileServer(b"")
+    handle = run(fast.upload(srv, str(f)))
+    assert isinstance(handle, types.InputFile) and handle.md5_checksum == hashlib.md5(data).hexdigest()
+    assert b"".join(srv.parts[i] for i in range(handle.parts)) == data and srv.max_inflight > 1
+
+
+def test_preupload_is_used_once_by_send(tmp_path):
+    from tgclone.message import CloneMessage, _uploaded_doc
+    data = os.urandom(2 * 1024 * 1024)
+    f = tmp_path / "v.mp4"
+    f.write_bytes(data)
+    srv = FileServer(b"")
+    msg = _t.SimpleNamespace(message="", entities=None, raw_text="", text="", sender_id=1, id=1,
+                             media=None, photo=None, poll=None, document=types.Document(
+                                 id=1, access_hash=1, file_reference=b"", date=None, mime_type="video/mp4",
+                                 size=len(data), dc_id=2, attributes=[], thumbs=None, video_thumbs=None))
+    calls = []
+    real = FileServer.__call__
+
+    async def counting(self, req):
+        calls.append(req)
+        return await real(self, req)
+    FileServer.__call__ = counting
+    try:
+        tm = CloneMessage(msg)
+        tm._downloaded = str(f)
+        run(tm.preupload(srv))
+        assert len(calls) == 4 and id(srv) in tm._handles
+        media = run(_uploaded_doc(srv, tm, str(f), None, None))
+        assert len(calls) == 4 and isinstance(media.file, types.InputFile), "send reused the pre-upload"
+        run(_uploaded_doc(srv, tm, str(f), None, None))
+        assert len(calls) == 8, "a second destination uploads its own copy"
+    finally:
+        FileServer.__call__ = real
