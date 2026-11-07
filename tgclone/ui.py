@@ -503,7 +503,7 @@ def welcome(trial_hours: int = 24, owner_only: bool = False, pending: bool = Fal
 
 HOW = """<b>❔ How it works</b>
 
-1️⃣ <b>Login</b> — 🔐 Login → 📲 share your number → type the code on the keypad.
+1️⃣ <b>Login</b> — 🔐 Login → 📲 share your number → send the code like <code>1 2 3 4 5</code>.
 2️⃣ <b>Forward</b> — ➕ New forward → forward a message from the source → then from your channel → ✅ Done.
 3️⃣ <b>Relax</b> — new posts are copied automatically. 🔁 Clone history copies old posts too.
 
@@ -518,18 +518,15 @@ def login_phone() -> str:
             "<i>Send /cancel to stop.</i>")
 
 
-def keypad(digits: str, note: str = "") -> Screen:
-    shown = " ".join(list(digits) + ["_"] * max(0, 5 - len(digits)))
-    text = ("<b>🔐 Login · step 2/3</b>\n\nEnter the code Telegram sent to your "
-            "<b>Telegram app</b> using the buttons:\n\n"
-            f"<blockquote><code>{esc(shown)}</code></blockquote>\n"
-            "⚠️ <i>Don't send the code as a message — Telegram blocks codes shared in chats.</i>")
+def code_prompt(note: str = "") -> Screen:
+    """Login step 2: the user types the code (spaces keep Telegram from blocking it)."""
+    text = ("<b>🔐 Login · step 2/3</b>\n\nTelegram sent a code to your <b>Telegram app</b>.\n"
+            "Send it here <b>with spaces</b> between the digits:\n\n"
+            "<blockquote><code>1 2 3 4 5</code></blockquote>\n"
+            "<i>⚠️ Without spaces Telegram may block the code. I delete your message right away.</i>")
     if note:
         text += f"\n\n{note}"
-    rows = [[B(str(n), f"otp:{n}") for n in r] for r in ((1, 2, 3), (4, 5, 6), (7, 8, 9))]
-    rows.append([B("⬅ Delete", "otp:b"), B("0", "otp:0"), B("✅ Done", "otp:ok", "success")])
-    rows.append([B("↩ New code", "otp:r"), B("❌ Cancel", "otp:x", "danger")])
-    return text, rows
+    return text, [[B("↩ New code", "otp:r"), B("❌ Cancel", "otp:x", "danger")]]
 
 
 def login_password(note: str = "") -> Screen:

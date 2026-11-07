@@ -203,3 +203,40 @@ def test_user_stop_forgets_job(hubenv):
         await asyncio.sleep(0.05)
     run(go())
     assert not app.store.pending()
+
+
+def test_premium_emoji_posts_go_via_bot_when_account_is_not_premium():
+    from fakes import Client as C
+
+    class Account(C):
+        async def get_me(self):
+            return _t.SimpleNamespace(premium=False, bot=False)
+
+    class Bot(C):
+        refuse = False
+
+        async def get_me(self):
+            return _t.SimpleNamespace(premium=False, bot=True)
+
+        async def send_message(self, dest, text, file=None, formatting_entities=None, **kw):
+            if self.refuse and any(isinstance(e, types.MessageEntityCustomEmoji)
+                                   for e in formatting_entities or []):
+                raise DocumentInvalidError(None)
+            return await super().send_message(dest, text, file=file, **kw)
+    a = make_app(Account())
+    a.bot = Bot()
+    m = Msg(1, "hi 😀", chat_id=-1)
+    m.entities = [types.MessageEntityCustomEmoji(3, 2, document_id=5)]
+    run(a.deliver(-1, [CloneMessage(m)], [7]))
+    assert a.bot.calls and not a.reader.calls, "bot posted it with the premium emoji"
+    # Telegram refuses the bot -> account posts with plain emoji, and the bot isn't asked again
+    b = make_app(Account())
+    b.bot = Bot()
+    b.bot.refuse = True
+    m2 = Msg(2, "hi 😀", chat_id=-1)
+    m2.entities = [types.MessageEntityCustomEmoji(3, 2, document_id=5)]
+    run(b.deliver(-1, [CloneMessage(m2)], [7]))
+    assert b.reader.calls and b.bot._tgc_no_emoji
+    plain = Msg(3, "no emoji", chat_id=-1)
+    run(b.deliver(-1, [CloneMessage(plain)], [7]))
+    assert not b.bot.calls, "normal posts always go from the account"

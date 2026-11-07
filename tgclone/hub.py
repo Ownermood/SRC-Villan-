@@ -1,7 +1,7 @@
 """Multi-user bot: every user works inside Telegram.
 
 Owner: BOT_TOKEN / API_ID / API_HASH / OWNER_ID once (python -m tgclone setup).
-Users: /start -> 🔐 Login (share phone -> keypad code -> 2FA)  or  🤖 Use without login.
+Users: /start -> 🔐 Login (share phone -> type code '1 2 3 4 5' -> 2FA)  or  🤖 Use without login.
 Plans: every new user gets a free trial (default 24h), then premium days from the owner.
 Each user's files live in data/users/<uid>/; logins are stored encrypted (accounts.py).
 """
@@ -998,13 +998,17 @@ class Hub:
                 await self._drop_login(uid)
                 raise ValueError(f"Telegram asks to wait {e.seconds}s before a new code.")
             st.update(step="code", client=client, phone=phone, hash=sent.phone_code_hash, digits="")
-            return await self._show(event, ui.keypad(""))
+            return await self._show(event, ui.code_prompt())
         if st["step"] == "code":
-            if (msg.raw_text or "").replace(" ", "").isdigit():
-                return await self._show(event, ui.keypad(
-                    st["digits"], "⚠️ Please use the buttons. If Telegram already blocked that "
-                                  "code, tap ↩ New code."))
-            return await self._show(event, ui.keypad(st["digits"]))
+            code = re.sub(r"\D", "", msg.raw_text or "")
+            try:
+                await msg.delete()  # don't leave the login code in the chat
+            except Exception:
+                pass
+            if not 5 <= len(code) <= 6:
+                return await self._show(event, ui.code_prompt(
+                    "⚠️ Send the 5-digit code with spaces, like <code>1 2 3 4 5</code>"))
+            return await self._try_code(event, code)
         if st["step"] == "password":
             pw = msg.raw_text or ""
             try:
@@ -1035,36 +1039,31 @@ class Hub:
             return await self.show_welcome(event, edit=True)
         if st["step"] != "code":
             return await event.answer()
-        if key == "b":
-            st["digits"] = st["digits"][:-1]
-        elif key.isdigit():
-            if len(st["digits"]) < 6:
-                st["digits"] += key
-        elif key == "r":
+        if key == "r":
             try:
                 sent = await st["client"].send_code_request(st["phone"])
             except FloodWaitError as e:
                 return await event.answer(f"Wait {e.seconds}s for a new code", alert=True)
-            st.update(hash=sent.phone_code_hash, digits="")
+            st.update(hash=sent.phone_code_hash)
             await event.answer("📨 New code sent")
-        elif key == "ok":
-            if len(st["digits"]) < 5:
-                return await event.answer("The code has 5 digits", alert=True)
-            try:
-                await st["client"].sign_in(phone=st["phone"], code=st["digits"],
-                                           phone_code_hash=st["hash"])
-            except PhoneCodeInvalidError:
-                st["digits"] = ""
-                return await self._show(event, ui.keypad("", "❌ Wrong code, try again."), edit=True)
-            except PhoneCodeExpiredError:
-                st["digits"] = ""
-                return await self._show(event, ui.keypad(
-                    "", "⌛ Code expired — tap ↩ New code."), edit=True)
-            except SessionPasswordNeededError:
-                st["step"] = "password"
-                return await self._show(event, ui.login_password(), edit=True)
-            return await self.finish_login(event, edit=True)
-        return await self._show(event, ui.keypad(st["digits"]), edit=True)
+            return await self._show(event, ui.code_prompt("📨 A new code was sent."), edit=True)
+        return await event.answer()
+
+    async def _try_code(self, event, code: str) -> None:
+        uid = event.sender_id
+        st = self.logins[uid]
+        try:
+            await st["client"].sign_in(phone=st["phone"], code=code, phone_code_hash=st["hash"])
+        except PhoneCodeInvalidError:
+            return await self._show(event, ui.code_prompt("❌ Wrong code, try again."))
+        except PhoneCodeExpiredError:
+            return await self._show(event, ui.code_prompt(
+                "⌛ This code expired (or Telegram blocked it because it was sent without spaces). "
+                "Tap ↩ New code and send it like <code>1 2 3 4 5</code>."))
+        except SessionPasswordNeededError:
+            st["step"] = "password"
+            return await self._show(event, ui.login_password())
+        return await self.finish_login(event)
 
     async def finish_login(self, event, edit: bool = False) -> None:
         uid = event.sender_id

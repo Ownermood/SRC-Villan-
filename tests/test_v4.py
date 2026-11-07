@@ -274,7 +274,7 @@ def test_all_screens_serialize():
     tc = TelegramClient(MemorySession(), 1, "x")
     hub = _t.SimpleNamespace(settings=__import__("tgclone.accounts", fromlist=["x"]).HubSettings(),
                              acc=None, ws={}, owner=1, started=time.time())
-    screens = [ui.welcome(), ui.keypad("12"), ui.login_password(), ui.admin_prompt("photo"),
+    screens = [ui.welcome(), ui.code_prompt(), ui.login_password(), ui.admin_prompt("photo"),
                ui.admin_prompt("block"), ui.admin_prompt("premium"), (ui.help_text(), None), (ui.HOW, None)]
     for scr in screens:
         for text, buttons in (scr, emoji.decorate(scr)):

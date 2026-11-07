@@ -137,9 +137,7 @@ def login(hub, uid, phone, twofa=False, env=None):
         env.factory.twofa = twofa
     press(hub, "lg", uid)
     say(hub, "", uid, contact=contact(uid, phone))
-    for d in "12345":
-        press(hub, f"otp:{d}", uid)
-    ev = press(hub, "otp:ok", uid)
+    ev = say(hub, "1 2 3 4 5", uid)
     if twofa:
         say(hub, "pw", uid)
     return ev
@@ -161,7 +159,7 @@ def test_welcome_and_login_required(hubenv):
     assert "tgclone" in ev.out[0][0], "not logged in -> welcome, never a panel"
 
 
-def test_full_login_with_keypad_and_2fa(hubenv):
+def test_full_login_with_typed_code_and_2fa(hubenv):
     hub = hubenv.new_hub()
     ev = press(hub, "lg", 5)
     assert hub.logins[5]["step"] == "phone"
@@ -169,20 +167,15 @@ def test_full_login_with_keypad_and_2fa(hubenv):
     assert "YOUR number" in ev.out[-1][0], "can't log in with someone else's shared contact"
     say(hub, "+91 98765 43005", 5)
     assert hub.logins[5]["step"] == "code"
-    ev = say(hub, "12345", 5)
-    assert "use the buttons" in ev.out[-1][0]
-    for d in "1234":
-        press(hub, f"otp:{d}", 5)
-    ev = press(hub, "otp:ok", 5)
-    assert ev.answers[-1] == ("The code has 5 digits", True)
-    press(hub, "otp:9", 5)
-    ev = press(hub, "otp:ok", 5)
-    assert "Wrong code" in ev.edits[-1][0] and hub.logins[5]["digits"] == ""
+    ev = say(hub, "1 2 3", 5)
+    assert "with spaces" in ev.out[-1][0] and ev.message.deleted, "too short -> ask again"
+    ev = say(hub, "1 2 3 4 9", 5)
+    assert "Wrong code" in ev.out[-1][0] and ev.message.deleted, "code message never stays in chat"
+    ev = press(hub, "otp:r", 5)
+    assert "new code" in ev.edits[-1][0].lower()
     hubenv.made[-1].twofa = True
-    for d in "12345":
-        press(hub, f"otp:{d}", 5)
-    ev = press(hub, "otp:ok", 5)
-    assert hub.logins[5]["step"] == "password" and "two-step" in ev.edits[-1][0]
+    ev = say(hub, "1-2-3-4-5", 5)
+    assert hub.logins[5]["step"] == "password" and "two-step" in ev.out[-1][0]
     ev = say(hub, "nope", 5)
     assert ev.message.deleted, "password message is deleted"
     assert "Wrong password (1/3)" in ev.out[-1][0]
@@ -315,7 +308,7 @@ def test_hub_screens_serialize():
     from telethon.sessions import MemorySession
     from tgclone import ui
     tc = TelegramClient(MemorySession(), 1, "x")
-    for text, buttons in [ui.welcome(), ui.keypad("123"), ui.login_password(),
+    for text, buttons in [ui.welcome(), ui.code_prompt("x"), ui.login_password(),
                           ui.account_view({"name": "A", "phone": "919876543210", "created": 0}, 5)]:
         tl_html.parse(text)
         if buttons:

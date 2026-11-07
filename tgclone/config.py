@@ -128,6 +128,7 @@ class Config(BaseModel):
     forward_mode: bool = False  # True = real forward ("Forwarded from" tag)
     send_via_bot: bool = False  # user account reads, BOT_TOKEN account sends
     protected_fallback: bool = True  # download + re-upload when copy is blocked
+    premium_emoji_via_bot: bool = True  # account without Premium: try posts with premium emoji via the bot
     max_file_mb: int = 0  # skip bigger files (0 = no limit; Telegram itself allows 2 GB / 4 GB premium)
     max_disk_mb: int = 6000  # temp download space; downloads wait when full (0 = off). One file may exceed it
     max_jobs: int = Field(3, ge=1, le=10)  # clone/save jobs running at the same time

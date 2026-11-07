@@ -316,9 +316,19 @@ async def _forward_to_topic(client: TelegramClient, dest: int, msgs: List[Messag
     return sorted(sent, key=lambda m: m.id)
 
 
+def has_custom_emoji(tms: List[CloneMessage]) -> bool:
+    for tm in tms:
+        if tm.text_changed:
+            if _MD_EMOJI.search(tm.text or ""):
+                return True
+        elif any(isinstance(e, types.MessageEntityCustomEmoji) for e in tm.message.entities or []):
+            return True
+    return False
+
+
 async def send(client: TelegramClient, dest: int, tms: List[CloneMessage], cfg: Config,
                reply_to: Optional[int] = None, same_client: bool = True,
-               progress=None, topic: Optional[int] = None) -> list:
+               progress=None, topic: Optional[int] = None, allow_plain: bool = True) -> list:
     """Send one message or one album to dest. Returns sent messages (same order).
 
     progress(direction, current, total) is called during download ("down") / upload ("up").
@@ -344,7 +354,7 @@ async def send(client: TelegramClient, dest: int, tms: List[CloneMessage], cfg: 
         try:
             return await _copy(client, dest, tms, reply_to, must_download, cfg, progress, plain)
         except DocumentInvalidError:
-            if plain and must_download:
+            if (plain and must_download) or not allow_plain:
                 raise
             # premium emoji / a document the sender can't reuse: plain emoji + fresh upload
             log.info("Retrying %s with plain emoji / re-upload", tms[0].message.id)

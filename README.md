@@ -9,7 +9,7 @@ One clean Telethon tool that merges **5 projects**:
 | clonechat | protected-content clone (download + re-upload), resume, file-type filter, per-message delay |
 | Save-Restricted-Content-Bot v2 / v3 | save posts from `t.me` links (public, private `/c/`, topic links), `/batch`, `/stop`, save target chat |
 
-**Multi-user bot**: anyone can use it from Telegram alone. Users log in inside the bot (📱 share number → code on a button keypad → 2FA). Every user gets their own forwards, settings, thumbnail, logo and jobs. Saved logins are encrypted (Fernet). The owner gets an 🛡 Admin panel: open / approval / private mode, ban, force logout, per-user limits.
+**Multi-user bot**: anyone can use it from Telegram alone. Users log in inside the bot (📲 share number → send the code as `1 2 3 4 5` → 2FA). Every user gets their own forwards, settings, thumbnail, logo and jobs. Saved logins are encrypted (Fernet). The owner gets an 🛡 Admin panel: open / approval / private mode, ban, force logout, per-user limits.
 
 Not kept (on purpose): premium/payment/redeem codes, ad shortener, `/eval` (remote code execution),
 speedtest, broadcast, yt-dlp downloader, MongoDB, Dropbox-hosted pyrogram forks and

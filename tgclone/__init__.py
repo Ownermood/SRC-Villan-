@@ -4,4 +4,4 @@ Merged from: tgcf (live/past/plugins/bot), Telethon-Channel-Clone (history copy)
 and clonechat (protected-content clone, resume, type filter).
 """
 
-__version__ = "4.1.0"
+__version__ = "4.2.0"

@@ -13,7 +13,7 @@ from telethon.tl.custom.message import Message
 from tgclone.config import (CONFIG_FILE, DATA_DIR, Config, Forward, Secrets, load_config, norm_ref,
                             save_config)
 from tgclone.jobs import Job, JobManager
-from tgclone.message import CloneMessage, media_key, send
+from tgclone.message import CloneMessage, _is_premium, has_custom_emoji, media_key, send
 from tgclone.plugins import apply_plugins, load_plugins
 from tgclone.storage import Store
 from tgclone.topics import Topics, reply_target, topic_of
@@ -185,6 +185,29 @@ class App:
     def save(self) -> None:
         save_config(self.cfg, self.cfg_path)
 
+    async def _send_premium_via_bot(self, dest, tms, reply_to, progress, topic):
+        """Account without Premium can't post premium emoji; the bot may (Telegram decides).
+
+        Returns the sent messages, or None to send normally (plain emoji from the account).
+        """
+        bot = self.bot
+        if (not self.cfg.premium_emoji_via_bot or bot is None or self.sender is bot
+                or getattr(bot, "_tgc_no_emoji", False) or not has_custom_emoji(tms)
+                or await _is_premium(self.sender)):
+            return None
+        try:
+            sent = await send(bot, dest, tms, self.cfg, reply_to, same_client=False,
+                              progress=progress, topic=topic, allow_plain=False)
+            log.info("Premium emoji post %s sent via the bot", tms[0].message.id)
+            return sent
+        except Exception as e:
+            if "DOCUMENT_INVALID" in str(e).upper() or "document file was invalid" in str(e):
+                bot._tgc_no_emoji = True  # Telegram doesn't let this bot use them: stop trying
+                log.info("Bot can't send premium emoji (Telegram rule) - using plain emoji")
+            else:
+                log.info("Bot couldn't post in %s (%s) - sending from the account", dest, e)
+            return None
+
     # ------------------------------------------------------------ delivery
     async def process(self, messages: List[Message]) -> List[CloneMessage]:
         out = []
@@ -214,10 +237,12 @@ class App:
                     except Exception as e:
                         log.warning("Topic for %s:%s -> %s failed: %s", src, src_topic, d, e)
                 reply_to = self.store.get_one(src, replied, d) if replied else None
+                sent = await self._send_premium_via_bot(d, tms, reply_to or topic, progress, topic)
                 try:
-                    sent = await send(self.sender, d, tms, self.cfg, reply_to or topic,
-                                      same_client=self.sender is self.reader,
-                                      progress=progress, topic=topic)
+                    if sent is None:
+                        sent = await send(self.sender, d, tms, self.cfg, reply_to or topic,
+                                          same_client=self.sender is self.reader,
+                                          progress=progress, topic=topic)
                 except Exception as e:
                     log.error("Send %s:%s -> %s failed: %s", src, first.id, d, e)
                     continue
