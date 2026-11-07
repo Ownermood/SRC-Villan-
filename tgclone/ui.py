@@ -84,21 +84,25 @@ async def main_menu(app: App, intro: str = "") -> Screen:
     plugins = ", ".join(p.id_ for p in app.plugins) or "none"
     hub = getattr(app, "hub", None)
     status = [
-        f"{'🟢' if app.from_to and not app.paused else '⚪'} <b>Live</b> · {len(app.from_to)} source(s) → {len(dests)} chat(s)"
+        f"{'🟢' if app.from_to and not app.paused else '⚪'} Live · {len(app.from_to)} source(s) → {len(dests)} chat(s)"
         + (" · ⏸ paused" if app.paused else ""),
-        f"{'⏳' if run else '💤'} <b>Jobs</b> · {len(run)} running",
-        f"🧩 <b>Plugins</b> · {esc(plugins)}",
+        f"{'⏳' if run else '💤'} Jobs · {len(run)} running",
+        f"🧩 Plugins · {esc(plugins)}",
     ]
     name = esc(getattr(hub, "bot_name", "") or "SRC Villan Bot")
-    text = f"⚡ <b>{name}</b> • TG Clone\n\n" + (f"{intro}\n\n" if intro else "")
-    text += "<b>Status</b>\n<blockquote>" + "\n".join(status) + "</blockquote>\n"
+    # whole screen bold; one blank line between sections; t.me in code so it is not a link
+    parts = [f"⚡ {name} • TG Clone"]
+    if intro:
+        parts.append(re.sub(r"</?b>", "", intro).strip())
+    parts.append("📊 Status\n<blockquote>" + "\n".join(status) + "</blockquote>")
     if hub is not None:
-        mode = ("🤖 <b>Mode</b> · without login (new posts only)" if app.botmode
-                else "🔐 <b>Mode</b> · Logged in (all features unlocked)")
-        text += (f"<b>Account</b>\n<blockquote>💎 <b>Plan</b> · {plan_label(hub.plan_status(app.uid))}\n"
-                 f"{mode}</blockquote>\n")
-    text += ("<i>💡 Add me as admin in your chats, then ➕ New forward.</i>" if app.botmode
-             else "<i>💡 Send any t.me post link to save it.</i>")
+        mode = ("🤖 Mode · without login (new posts only)" if app.botmode
+                else "🔐 Mode · Logged in (all features unlocked)")
+        parts.append(f"👤 Account\n<blockquote>💎 Plan · {plan_label(hub.plan_status(app.uid))}\n"
+                     f"{mode}</blockquote>")
+    parts.append("<i>💡 Add me as admin in your chats, then ➕ New forward.</i>" if app.botmode
+                 else "<i>💡 Send any post link (<code>t.me/…</code>) to save it.</i>")
+    text = "<b>" + "\n\n".join(parts) + "</b>"
     buttons = [
         [B("🔁 Clone a chat", "cl", "success")],
         [B("📡 Forwards", "fl:0", "primary"), B("➕ New forward", "na", "primary")],
