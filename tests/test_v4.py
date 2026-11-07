@@ -9,7 +9,7 @@ from PIL import Image
 from telethon import Button
 from telethon.tl import types
 
-from fakes import Msg, TextEvent, make_app
+from fakes import Msg, make_app
 from test_hub import OWNER, datas, login, press, say
 from tgclone import app as appmod, emoji, live, ui
 from tgclone.config import Forward
@@ -36,19 +36,51 @@ def test_emoji_decorate_and_fallback():
     assert emoji.is_emoji_error(Exception("DOCUMENT_INVALID")) and not emoji.is_emoji_error(Exception("FLOOD"))
 
 
-def test_hub_falls_back_to_plain_emoji_when_refused(hubenv):
-    hub = hubenv.new_hub()
+def test_bot_wrapper_decorates_everything_and_falls_back():
+    from fakes import Client
     emoji.set_enabled(True)
-    calls = []
 
-    class Ev(TextEvent):
-        async def respond(self, text, **kw):
-            calls.append(text)
-            if "tg-emoji" in text:
-                raise Exception("DOCUMENT_INVALID (caused by SendMessageRequest)")
-            return await super().respond(text, **kw)
-    run(hub._show(Ev("x", 5), ("⚡ hello", None)))
-    assert len(calls) == 2 and "tg-emoji" not in calls[1] and not emoji.active()
+    class Bot(Client):
+        refuse = False
+        log = []
+
+        async def send_message(self, chat, text="", buttons=None, parse_mode=None, **kw):
+            Bot.log.append(("send", text, parse_mode, buttons))
+            if self.refuse and "tg-emoji" in text:
+                raise Exception("DOCUMENT_INVALID")
+            return _t.SimpleNamespace(entities=[types.MessageEntityCustomEmoji(0, 1, document_id=1)]
+                                      if "tg-emoji" in text else [])
+
+        async def edit_message(self, chat, msg, text=None, buttons=None, parse_mode=(), **kw):
+            Bot.log.append(("edit", text, parse_mode, buttons))
+
+        async def send_file(self, chat, file, caption=None, parse_mode=None, buttons=None, **kw):
+            Bot.log.append(("file", caption, parse_mode, buttons))
+    b = Bot()
+    emoji.install(b)
+    emoji.install(b)  # idempotent
+    run(b.send_message(1, "⚠️ Error: <telethon.Obj at 0x1>"))
+    kind, text, pm, _ = Bot.log[-1]
+    assert pm == "html" and "&lt;telethon.Obj" in text and text.count("<tg-emoji") == 1, "plain text escaped"
+    assert emoji.status == "working"
+    run(b.send_message(1, '<b>⚡ hi</b> <tg-emoji emoji-id="5">⚡</tg-emoji>', parse_mode="html",
+                       buttons=[[Button.inline("⚙️ Settings", b"st")]]))
+    _, text, _, buttons = Bot.log[-1]
+    assert text.count("<tg-emoji") == 2, "already decorated parts are not wrapped twice"
+    assert buttons[0][0].style.icon == emoji.PACK["⚙"] and buttons[0][0].text == "Settings"
+    run(b.edit_message(1, 2, "⏳ working"))
+    assert Bot.log[-1][0] == "edit" and "<tg-emoji" in Bot.log[-1][1]
+    run(b.send_file(1, "x.jpg", caption="🖼 photo"))
+    assert "<tg-emoji" in Bot.log[-1][1]
+    run(b.send_message(1, "x", formatting_entities=[types.MessageEntityBold(0, 1)]))
+    assert Bot.log[-1][1] == "x", "pre-formatted messages untouched"
+    run(b.send_message(-1001234, "📹 cloned **post**"))
+    assert Bot.log[-1][1] == "📹 cloned **post**" and Bot.log[-1][2] is None, "posts to chats untouched"
+    run(b.send_file(-1001234, "v.mp4", caption="🎬 caption"))
+    assert Bot.log[-1][1] == "🎬 caption"
+    b.refuse = True
+    run(b.send_message(1, "⚡ refused"))
+    assert Bot.log[-1][1] == "⚡ refused" and not emoji.active(), "Telegram refused -> normal emoji"
     emoji.set_enabled(True)
 
 

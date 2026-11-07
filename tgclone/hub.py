@@ -93,6 +93,7 @@ class Hub:
             self.bot = TelegramClient(str(DATA_DIR / "bot"), self.secrets.api_id,
                                       self.secrets.api_hash, flood_sleep_threshold=60)
             await self.bot.start(bot_token=self.secrets.bot_token)
+        emoji.install(self.bot)  # every bot message / edit / caption gets premium emoji
         me = await self.bot.get_me()
         log.info("Bot @%s started", getattr(me, "username", "?"))
 
@@ -374,7 +375,6 @@ class Hub:
 
     async def _notify(self, uid: int, text: str, buttons=None) -> None:
         try:
-            text, buttons = emoji.decorate((text, buttons))
             await self.bot.send_message(uid, text, buttons=buttons, parse_mode="html")
         except Exception as e:
             log.debug("notify %s failed: %s", uid, e)
@@ -453,49 +453,32 @@ class Hub:
 
     # ============================================================ sending screens
     async def _show(self, event, screen, edit: bool = False):
-        plain = screen
-        for attempt in (emoji.decorate(screen), plain):
-            text, buttons = attempt
-            try:
-                if edit:
-                    res = await event.edit(text, buttons=buttons, parse_mode="html", link_preview=False)
-                else:
-                    res = await event.respond(text, buttons=buttons, parse_mode="html", link_preview=False)
-                emoji.check_sent(text, res)  # did Telegram keep the animated emoji?
-                return res
-            except Exception as e:
-                msg = str(e).lower()
-                if "not modified" in msg:
-                    return None
-                if attempt is not plain and emoji.is_emoji_error(e):
-                    log.warning("Premium emoji refused (%s) - using normal emoji", e)
-                    emoji.disable_for_session()
-                    continue
-                if edit and ("caption" in msg or "media" in msg):
-                    edit = False  # screen was a photo with a short caption: send fresh
-                    return await self._show(event, screen, edit=False)
-                raise
+        text, buttons = screen  # premium emoji are added by emoji.install() on the bot
+        try:
+            if edit:
+                return await event.edit(text, buttons=buttons, parse_mode="html", link_preview=False)
+            return await event.respond(text, buttons=buttons, parse_mode="html", link_preview=False)
+        except Exception as e:
+            msg = str(e).lower()
+            if "not modified" in msg:
+                return None
+            if edit and ("caption" in msg or "media" in msg):
+                return await self._show(event, screen, edit=False)  # photo screen: send fresh
+            raise
 
     async def send_start(self, event, screen) -> None:
         """/start: big photo on top (if the owner set one) with the screen as caption."""
         photo = self.settings.start_photo
-        text, buttons = emoji.decorate(screen)
+        text, buttons = screen
         if photo and len(ui.strip_tags(text)) <= 1000:
-            media = self._start_media or photo
-            for attempt in ((text, buttons), screen):
-                try:
-                    msg = await self.bot.send_file(event.chat_id, media, caption=attempt[0],
-                                                   buttons=attempt[1], parse_mode="html")
-                    emoji.check_sent(attempt[0], msg)
-                    if self._start_media is None and getattr(msg, "media", None) is not None:
-                        self._start_media = msg.media
-                    return
-                except Exception as e:
-                    if attempt is not screen and emoji.is_emoji_error(e):
-                        emoji.disable_for_session()
-                        continue
-                    log.warning("Start photo failed (%s) - sending text only", e)
-                    break
+            try:
+                msg = await self.bot.send_file(event.chat_id, self._start_media or photo,
+                                               caption=text, buttons=buttons, parse_mode="html")
+                if self._start_media is None and getattr(msg, "media", None) is not None:
+                    self._start_media = msg.media
+                return
+            except Exception as e:
+                log.warning("Start photo failed (%s) - sending text only", e)
         await self._show(event, screen)
 
     # ============================================================ routing
@@ -957,8 +940,7 @@ class Hub:
         await self.ensure_trial(uid)
         await self._drop_login(uid)
         self.logins[uid] = {"step": "phone", "t": time.time()}
-        text, _ = emoji.decorate((ui.login_phone(), None))
-        await event.respond(text, parse_mode="html", buttons=[
+        await event.respond(ui.login_phone(), parse_mode="html", buttons=[
             [Button.request_phone("📲 Share my number", resize=True, single_use=True)]])
 
     async def _drop_login(self, uid: int) -> None:

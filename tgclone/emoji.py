@@ -102,7 +102,8 @@ def doc_id(emoji: str) -> Optional[int]:
 
 def decorate_text(html: str) -> str:
     """Wrap known emoji in <tg-emoji>. Leaves <code>/<pre> content untouched."""
-    parts = re.split(r"(<code>.*?</code>|<pre>.*?</pre>|<[^>]+>)", html, flags=re.S)
+    parts = re.split(r"(<tg-emoji[^>]*>.*?</tg-emoji>|<code>.*?</code>|<pre>.*?</pre>|<[^>]+>)",
+                     html, flags=re.S)
     for i, part in enumerate(parts):
         if part.startswith("<"):
             continue
@@ -144,3 +145,98 @@ def is_emoji_error(e: Exception) -> bool:
     s = str(e).upper()
     return any(k in s for k in ("EMOJI", "DOCUMENT_INVALID", "PREMIUM", "ENTITY_BOUNDS",
                                 "ENTITIES_TOO_LONG", "BUTTON"))
+
+
+# ---------------------------------------------------------------- every bot message
+def _prepare(text: str, parse_mode) -> Optional[str]:
+    """HTML ready for decoration, or None when this message must be left alone."""
+    if not isinstance(text, str) or not text or not active():
+        return None
+    if isinstance(parse_mode, str) and parse_mode.lower() == "html":
+        return text
+    if parse_mode in (None, ()):  # client default (markdown): our plain texts -> escape to HTML
+        import html as _html
+        return _html.escape(text, quote=False)
+    return None
+
+
+def _is_private(entity) -> bool:
+    if isinstance(entity, int):
+        return entity > 0
+    if isinstance(entity, (types.InputPeerUser, types.PeerUser, types.User, types.InputUser)):
+        return True
+    peer = getattr(entity, "peer_id", None)  # a Message being edited
+    return isinstance(peer, types.PeerUser)
+
+
+def install(client) -> None:
+    """Make every message / edit / caption this (bot) client sends use premium emoji.
+
+    Falls back to the original call if Telegram refuses, and records whether Telegram
+    kept the custom emoji (see `status`). Callback popups can't carry formatting at all.
+    """
+    if getattr(client, "_tgc_emoji", False):
+        return
+    client._tgc_emoji = True
+    orig_send, orig_edit, orig_file = client.send_message, client.edit_message, client.send_file
+
+    async def _go(fn, args, kw, where):
+        args = list(args)
+        # only the bot's own screens in private chats - never cloned posts in groups/channels
+        if kw.get("formatting_entities") or not _is_private(args[0] if args else kw.get("entity")):
+            return await fn(*args, **kw)
+        if where == "caption":
+            text = kw.get("caption")
+        elif where == "send":
+            text = args[1] if len(args) > 1 else kw.get("message", "")
+        else:  # edit: (entity, message, text) / (message, text) / text=
+            if "text" in kw:
+                text = kw["text"]
+            elif len(args) > 2 and isinstance(args[2], str):
+                text = args[2]
+            elif len(args) > 1 and isinstance(args[1], str):
+                text = args[1]
+            else:
+                text = None
+        html = _prepare(text, kw.get("parse_mode", None if where != "edit" else ()))
+        if html is None:
+            return await fn(*args, **kw)
+        new_text, buttons = decorate((html, kw.get("buttons")))
+        nargs, nkw = list(args), dict(kw, parse_mode="html")
+        if buttons is not None:
+            nkw["buttons"] = buttons
+        if where == "caption":
+            nkw["caption"] = new_text
+        elif where == "send":
+            if len(nargs) > 1:
+                nargs[1] = new_text
+            else:
+                nkw["message"] = new_text
+        elif "text" in kw:
+            nkw["text"] = new_text
+        elif len(nargs) > 2 and isinstance(nargs[2], str):
+            nargs[2] = new_text
+        else:
+            nargs[1] = new_text
+        try:
+            res = await fn(*nargs, **nkw)
+        except Exception as e:
+            if not is_emoji_error(e):
+                raise
+            import logging
+            logging.getLogger("tgclone").warning("Premium emoji refused (%s) - normal emoji", e)
+            disable_for_session()
+            return await fn(*args, **kw)
+        check_sent(new_text, res)
+        return res
+
+    async def send_message(*args, **kw):
+        return await _go(orig_send, args, kw, "send")
+
+    async def edit_message(*args, **kw):
+        return await _go(orig_edit, args, kw, "edit")
+
+    async def send_file(*args, **kw):
+        return await _go(orig_file, args, kw, "caption")
+
+    client.send_message, client.edit_message, client.send_file = send_message, edit_message, send_file
