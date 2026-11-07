@@ -48,7 +48,20 @@ PACK = {
     "💎": 5260681660189408650,
 }
 
+# every other emoji the screens use -> closest emoji of the pack (so all of them animate)
+ALIAS = {
+    "⏱": "⏰", "⏳": "⏰", "⏸": "📴", "▫": "☑", "♻": "↩", "⚪": "⚫", "⛔": "🚫", "✖": "❌",
+    "❔": "ℹ", "❗": "⚠", "⭕": "📹", "🆔": "🔑", "🎁": "🛍", "🎉": "👍", "🎞": "🖼",
+    "🎬": "📹", "🎯": "📍", "🎵": "🎧", "🏠": "🖥", "👁": "🔍", "👑": "🏅", "👤": "👨‍🦰",
+    "👥": "🫂", "💡": "☀", "💤": "📴", "💧": "💦", "📌": "📍", "📏": "↔", "📤": "⬆",
+    "📥": "⬇", "📨": "📬", "🔁": "↪", "🔄": "↕", "🔐": "🔑", "🔒": "🔑", "🔤": "🔠",
+    "🗂": "🗃", "😕": "💔", "🛡": "💼", "🟢": "🔛", "🤖": "👩‍💻", "🧩": "⚙", "🧸": "❤",
+    "🧾": "📑",
+}
+PACK.update({k.replace(VS, ""): PACK[v.replace(VS, "")] for k, v in ALIAS.items()})
+
 _enabled = True  # owner switch (admin panel)
+status = "unknown"  # unknown | working | removed  (what Telegram did with the last screen)
 _broken = False  # Telegram refused once this run -> plain from now on
 # longest first so multi-codepoint emoji win; optional VS16 after each
 _RE = re.compile("|".join(re.escape(k) + f"{VS}?" for k in sorted(PACK, key=len, reverse=True)))
@@ -62,6 +75,20 @@ def set_enabled(on: bool) -> None:
 
 def active() -> bool:
     return _enabled and not _broken
+
+
+def check_sent(sent_text: str, message) -> None:
+    """Telegram may silently drop custom emoji a bot isn't allowed to use: detect it."""
+    global status
+    if "<tg-emoji" not in sent_text or message is None or not hasattr(message, "entities"):
+        return
+    kept = any(isinstance(e, types.MessageEntityCustomEmoji) for e in message.entities or [])
+    new = "working" if kept else "removed"
+    if new != status and not kept:
+        import logging
+        logging.getLogger("tgclone").warning(
+            "Premium emoji: Telegram removed them from the bot's message (bot not allowed)")
+    status = new
 
 
 def disable_for_session() -> None:

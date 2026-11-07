@@ -16,7 +16,7 @@ from telethon.tl import functions
 from telethon.tl import types
 from telethon.tl.custom.message import Message
 
-from tgclone import thumbs
+from tgclone import fast, thumbs
 from tgclone.config import DOWNLOAD_DIR, Config
 
 log = logging.getLogger("tgclone")
@@ -100,8 +100,15 @@ class CloneMessage:
         await _wait_disk(size, max_disk_mb)
         cb = (lambda c, t: progress("down", c, t)) if progress else None
         # unique name: parallel jobs / users never overwrite each other's files
-        path = await self.message.download_media(file=str(DOWNLOAD_DIR / uuid.uuid4().hex),
-                                                 progress_callback=cb)
+        name = uuid.uuid4().hex
+        path = None
+        client = getattr(self.message, "client", None)
+        if client is not None and self.message.document is not None:
+            ext = getattr(self.message.file, "ext", "") or ""
+            path = await fast.download(client, self.message, str(DOWNLOAD_DIR / (name + ext)), cb)
+        if not path:
+            path = await self.message.download_media(file=str(DOWNLOAD_DIR / name),
+                                                     progress_callback=cb)
         if not path:
             raise FileNotFoundError("download failed")
         self._downloaded = path
@@ -172,7 +179,8 @@ async def _uploaded_doc(client: TelegramClient, tm: CloneMessage, path: str,
                         thumb: Optional[str], up) -> types.InputMediaUploadedDocument:
     """Pre-uploaded document with our thumbnail (send_file can't set thumbs in albums)."""
     doc = tm.message.document
-    handle = await retry(client.upload_file, path, progress_callback=up)
+    handle = await fast.upload(client, path, up) or \
+        await retry(client.upload_file, path, progress_callback=up)
     thumb_h = await retry(client.upload_file, thumb) if thumb else None
     mime = getattr(doc, "mime_type", None) or mimetypes.guess_type(path)[0] \
         or "application/octet-stream"
@@ -288,6 +296,11 @@ async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
             thumb = str(thumbs.custom_path(cfg))
         if thumb:
             kw["thumb"] = thumb
+        if msg.document is not None and os.path.getsize(path) > 10 * 1024 * 1024:
+            # big document: fast parallel upload, original attributes kept
+            media = await _uploaded_doc(client, tm, path, thumb, up)
+            return _as_list(await retry(client.send_file, dest, media, caption=text,
+                                        formatting_entities=ents, reply_to=reply_to))
         return _as_list(await retry(client.send_file, dest, path, caption=text,
                                     formatting_entities=ents, reply_to=reply_to,
                                     progress_callback=up, **kw))

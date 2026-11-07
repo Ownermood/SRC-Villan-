@@ -54,22 +54,28 @@ class Job:
         self.task: Optional[asyncio.Task] = None
         self._finished = False
         self._file_t = 0.0
-        self._file_start = (0.0, 0)
+        self._xfer = None
+        self._samples = []
 
     # called by send() during download/upload
     def file_progress(self, direction: str, cur: int, total: int) -> None:
         now = time.time()
-        if cur == 0 or self._file_start[1] > cur:
-            self._file_start = (now, cur)
+        key = (direction, total)
+        if key != self._xfer or not self._samples or cur < self._samples[-1][1]:
+            self._xfer = key  # a new download / upload started: restart the clock
+            self._samples = []
+        self._samples.append((now, cur))
+        self._samples = [s for s in self._samples if now - s[0] <= 10] or self._samples[-2:]
         if now - self._file_t < 1 and cur < total:
             return
         self._file_t = now
-        t0, c0 = self._file_start
-        speed = (cur - c0) / (now - t0) if now > t0 else 0
+        t0, c0 = self._samples[0]
+        speed = (cur - c0) / (now - t0) if now - t0 > 0.2 else 0
         icon = "⬇️" if direction == "down" else "⬆️"
-        eta = f" · {human_time((total - cur) / speed)} left" if speed > 0 and total else ""
+        eta = f" · {human_time((total - cur) / speed)} left" if speed > 1024 and total else ""
         self.file = (f"{icon} {bar(cur / total if total else 0, 10)} "
-                     f"{human_size(cur)} / {human_size(total)} · {human_size(speed)}/s{eta}")
+                     f"{human_size(cur)} / {human_size(total)} · "
+                     f"{human_size(speed) + '/s' if speed else 'measuring…'}{eta}")
         if cur >= total:
             self.file = ""
 

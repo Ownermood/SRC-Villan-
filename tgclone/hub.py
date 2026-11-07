@@ -458,8 +458,11 @@ class Hub:
             text, buttons = attempt
             try:
                 if edit:
-                    return await event.edit(text, buttons=buttons, parse_mode="html", link_preview=False)
-                return await event.respond(text, buttons=buttons, parse_mode="html", link_preview=False)
+                    res = await event.edit(text, buttons=buttons, parse_mode="html", link_preview=False)
+                else:
+                    res = await event.respond(text, buttons=buttons, parse_mode="html", link_preview=False)
+                emoji.check_sent(text, res)  # did Telegram keep the animated emoji?
+                return res
             except Exception as e:
                 msg = str(e).lower()
                 if "not modified" in msg:
@@ -483,6 +486,7 @@ class Hub:
                 try:
                     msg = await self.bot.send_file(event.chat_id, media, caption=attempt[0],
                                                    buttons=attempt[1], parse_mode="html")
+                    emoji.check_sent(attempt[0], msg)
                     if self._start_media is None and getattr(msg, "media", None) is not None:
                         self._start_media = msg.media
                     return
@@ -937,9 +941,9 @@ class Hub:
         me = await self.bot.get_me()
         await self._show(event, (
             "🤖 <b>Without-login mode is on.</b>\n\n<blockquote>"
-            f"1️⃣ Add @{getattr(me, 'username', 'this_bot')} as <b>admin</b> in your source and "
-            "destination chats.\n2️⃣ ➕ New forward → forward a message from each.\n"
-            "3️⃣ New posts are copied automatically.</blockquote>\n"
+            f"🔑 Add @{getattr(me, 'username', 'this_bot')} as <b>admin</b> in your source and "
+            "destination chats.\n📡 New forward → forward a message from each.\n"
+            "✅ New posts are copied automatically.</blockquote>\n"
             "<i>Old posts, protected chats and saving links need 🔐 Login.</i>", None))
         await self._show(event, await ui.main_menu(app))
 

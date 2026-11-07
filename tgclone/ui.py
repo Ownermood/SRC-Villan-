@@ -503,9 +503,9 @@ def welcome(trial_hours: int = 24, owner_only: bool = False, pending: bool = Fal
 
 HOW = """<b>❔ How it works</b>
 
-1️⃣ <b>Login</b> — 🔐 Login → 📲 share your number → send the code like <code>1 2 3 4 5</code>.
-2️⃣ <b>Forward</b> — ➕ New forward → forward a message from the source → then from your channel → ✅ Done.
-3️⃣ <b>Relax</b> — new posts are copied automatically. 🔁 Clone history copies old posts too.
+🔑 <b>Login</b> — 🔐 Login → 📲 share your number → send the code like <code>1 2 3 4 5</code>.
+📡 <b>Forward</b> — ➕ New forward → forward a message from the source → then from your channel → ✅ Done.
+✅ <b>Relax</b> — new posts are copied automatically. 🔁 Clone history copies old posts too.
 
 <blockquote><b>🤖 Without login?</b> Add me as admin in both chats (you must be admin too).
 Only new posts, and only chats where forwarding is allowed.
@@ -611,7 +611,7 @@ def admin_view(hub) -> Screen:
             f"⏳ <b>Jobs</b> · {running} running / {st.max_total_jobs}\n"
             f"🔐 <b>Access</b> · {mode} · {c['pending']} waiting · {c['banned']} banned\n"
             f"🚫 <b>Blocked chats</b> · {c['blocked']}\n"
-            f"⏰ <b>Uptime</b> · {left(up)}</blockquote>")
+            f"⏰ <b>Uptime</b> · {left(up)}</blockquote>\n" + _emoji_note(st))
     rows = [
         [_a("👥 Users", "adu:0"), _a(f"📬 Requests ({c['pending']})", "adp")],
         [_a("💎 Premium", "apm"), _a("🚫 Blocked chats", "abl")],
@@ -620,6 +620,18 @@ def admin_view(hub) -> Screen:
         [B("🔄 Refresh", "ad"), B("« Back", "m")],
     ]
     return text, rows
+
+
+def _emoji_note(st) -> str:
+    from tgclone import emoji
+    if not st.premium_emoji:
+        return "⭐ <b>Premium emoji</b> · off"
+    return {
+        "working": "⭐ <b>Premium emoji</b> · ✅ Telegram shows them",
+        "removed": "⭐ <b>Premium emoji</b> · ❌ Telegram removes them — a bot may use custom emoji only "
+                   "if it has a <b>Fragment username</b> (or the bot owner has Telegram Premium). "
+                   "Everything else works normally.",
+    }.get(emoji.status, "⭐ <b>Premium emoji</b> · checking on the next screen…")
 
 
 def admin_access(hub) -> Screen:

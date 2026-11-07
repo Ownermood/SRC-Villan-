@@ -240,3 +240,27 @@ def test_premium_emoji_posts_go_via_bot_when_account_is_not_premium():
     plain = Msg(3, "no emoji", chat_id=-1)
     run(b.deliver(-1, [CloneMessage(plain)], [7]))
     assert not b.bot.calls, "normal posts always go from the account"
+
+
+def test_every_screen_emoji_is_premium():
+    import re
+    from pathlib import Path
+    from tgclone import emoji
+    root = Path(__file__).resolve().parents[1] / "tgclone"
+    src = "".join((root / f).read_text() for f in ("ui.py", "hub.py", "bot.py", "jobs.py"))
+    found = set(re.findall("[\U0001F000-\U0001FAFF☀-➿⬀-⯿←-⇿⏩-⏺"
+                           "ℹ▪-◾](?:‍[\U0001F000-\U0001FAFF☀-➿])*", src))
+    text_glyphs = {"→", "▰", "▱", "●"}  # progress bars / arrows, not emoji
+    plain = {e for e in found if emoji.doc_id(e) is None} - text_glyphs
+    assert not plain, f"not premium: {plain}"
+
+
+def test_detects_when_telegram_removes_custom_emoji():
+    from tgclone import emoji
+    sent = '<tg-emoji emoji-id="1">⚡</tg-emoji> hi'
+    emoji.check_sent(sent, _t.SimpleNamespace(entities=[types.MessageEntityBold(0, 1)]))
+    assert emoji.status == "removed"
+    emoji.check_sent(sent, _t.SimpleNamespace(entities=[types.MessageEntityCustomEmoji(0, 1, document_id=1)]))
+    assert emoji.status == "working"
+    emoji.check_sent("plain", _t.SimpleNamespace(entities=[]))
+    assert emoji.status == "working", "plain screens don't change the verdict"
