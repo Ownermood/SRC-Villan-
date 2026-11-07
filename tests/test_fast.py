@@ -330,3 +330,27 @@ def test_pause_is_remembered_across_restarts(tmp_path, monkeypatch):
         assert fast._state["off"] - fast.time.time() > 3000, "second reset: longer pause"
     finally:
         fast.STATE_FILE = None
+
+
+def test_shutdown_cancel_skips_finish_but_user_stop_runs_it():
+    from tgclone.jobs import Job, JobManager
+
+    async def go():
+        jm = JobManager()
+        finished = []
+
+        async def work(job):
+            await asyncio.sleep(10)
+
+        async def on_finish(job):
+            finished.append(job.id)
+        a = jm.start(Job("clone", "A", "a"), work, on_finish)
+        b = jm.start(Job("clone", "B", "b"), work, on_finish)
+        await asyncio.sleep(0)
+        jm.stop(a.id)  # user pressed Stop -> card / DM / forget
+        b.task.cancel()  # Ctrl+C -> nothing sent, kept for resume
+        await asyncio.gather(a.task, b.task, return_exceptions=True)
+        await asyncio.sleep(0.01)
+        return finished, a, b
+    finished, a, b = run(go())
+    assert finished == [a.id] and b.state == "stopped" and not b.cancelled

@@ -317,3 +317,13 @@ def test_hub_screens_serialize():
         if buttons:
             assert bytes(tc.build_reply_markup(buttons))
     assert ui.mask_phone("919876543210") == "+91••••••10"
+
+
+def test_start_clears_leftover_downloads(hubenv, monkeypatch, tmp_path):
+    from tgclone import config, hub as hubmod
+    d = tmp_path / "downloads"
+    d.mkdir()
+    (d / "old.mp4").write_bytes(b"x" * 1000)
+    monkeypatch.setattr(config, "DOWNLOAD_DIR", d)
+    hubmod.Hub._clear_downloads()
+    assert list(d.iterdir()) == []

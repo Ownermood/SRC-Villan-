@@ -155,6 +155,9 @@ class JobManager:
                 job.state = "stopped" if job.cancelled else "done"
             except asyncio.CancelledError:
                 job.state = "stopped"
+                if not job.cancelled:  # bot shutting down: no card edit / DM, job resumes on start
+                    job._finished = True
+                    raise
             except Exception as e:
                 log.exception("Job #%s failed", job.id)
                 job.state, job.error = "failed", str(e)

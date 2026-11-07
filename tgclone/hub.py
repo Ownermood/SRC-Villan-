@@ -107,6 +107,7 @@ class Hub:
         # answer buttons right away; users are loaded below (in parallel) while the bot already works
         self.restoring = set(self.acc.botmode_users()) | {uid for uid, _ in self.acc.sessions()}
         self.register()
+        self._clear_downloads()
 
         if self.secrets.session_string:  # legacy: owner session from .env
             client = self.make_client(self.secrets.session_string)
@@ -116,7 +117,8 @@ class Hub:
                 self.owner = self.owner or uid
                 await self.open_workspace(self.owner, client)
             else:
-                log.error("SESSION_STRING in .env is not valid any more")
+                log.error("SESSION_STRING in .env is not valid any more (session ended). Remove the "
+                          "SESSION_STRING line from .env and log in from the bot: /login")
         if not self.owner:
             log.warning("OWNER_ID not set - nobody can open the admin panel")
         else:
@@ -439,6 +441,27 @@ class Hub:
             if app.user is not None:
                 return app.user
         return self.bot
+
+    @staticmethod
+    def _clear_downloads() -> None:
+        """Files left by a stop / crash mid-transfer filled the folder ('waiting for space').
+        Nothing is transferring yet at start, so everything in it is stale."""
+        from tgclone.config import DOWNLOAD_DIR
+        freed = n = 0
+        try:
+            for f in DOWNLOAD_DIR.iterdir():
+                if f.is_file():
+                    try:
+                        size = f.stat().st_size
+                        f.unlink()
+                        freed += size
+                        n += 1
+                    except OSError:
+                        pass
+        except FileNotFoundError:
+            return
+        if n:
+            log.info("Cleared %d leftover download file(s), %.0f MB", n, freed / 1048576)
 
     async def block_targets(self, msg) -> List[Tuple[int, str, str, str]]:
         """(chat id, title, folder slug, folder name) to block from a folder link, invite, link,
