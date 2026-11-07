@@ -819,7 +819,8 @@ def admin_stats(hub, live: bool = True) -> Screen:
     sv = _server()
     cpu = min(100, int(sv["load"] / sv["cores"] * 100))
     ram_used = sv["mem_total"] - sv["mem_free"]
-    pool = "⏸ paused (Telegram cut them)" if fast._paused(_PoolProbe()) else "✅ allowed"
+    pool = ("❌ off (Admin → Limits)" if not fast.ENABLED else
+            "⏸ paused (Telegram cut them)" if fast._paused(_PoolProbe()) else "✅ allowed")
     total = c["users"] + c["botmode"]
 
     def pct(a, b):
@@ -897,11 +898,16 @@ def admin_limits(hub) -> Screen:
             f"🎁 Jobs at once · free trial · <b>{st.user_max_jobs}</b>\n"
             f"💎 Jobs at once · premium · <b>{st.premium_max_jobs}</b> (e.g. channel + group + topics)\n"
             f"📥 Posts per save · <b>{st.user_max_batch or '∞ no limit'}</b>\n"
-            f"📊 Jobs at once, all users · <b>{st.max_total_jobs}</b></blockquote>",
+            f"📊 Jobs at once, all users · <b>{st.max_total_jobs}</b></blockquote>\n"
+            f"🔌 <b>Extra connections</b> · {'on' if st.extra_connections else 'off'}\n<i>Big files use 4 extra "
+            f"connections. If your network keeps cutting them (warnings in the log), turn this off: "
+            f"one connection, 8 parts at once.</i>",
             [[B("➖", "adj:-"), B(f"🎁 Trial {st.user_max_jobs}", "noop"), B("➕", "adj:+")],
              [B("➖", "adp3:-"), B(f"💎 Premium {st.premium_max_jobs}", "noop"), B("➕", "adp3:+")],
              [B("➖", "adx:-"), B(f"📥 {st.user_max_batch or '∞'}/save", "noop"), B("➕", "adx:+")],
              [B("➖", "adt:-"), B(f"📊 {st.max_total_jobs} total", "noop"), B("➕", "adt:+")],
+             [B(("✅" if st.extra_connections else "❌") + " Extra connections " +
+                ("on" if st.extra_connections else "off"), "axc", "success" if st.extra_connections else None)],
              [B("« Admin", "ad")]])
 
 

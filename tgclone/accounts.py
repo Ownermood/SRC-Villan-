@@ -27,6 +27,7 @@ class HubSettings(BaseModel):
     premium_emoji: bool = True  # animated custom emoji in texts and buttons
     plans: str = "7=₹49, 30=₹149, 90=₹349"  # days=price shown on the Get premium screen
     pay_info: str = ""  # how to pay (UPI id, link...) shown after a plan is chosen
+    extra_connections: bool = True  # big files: 4 extra connections (off if your network cuts them)
     start_text: str = ""  # owner's /start message (HTML, {name} {bot} {plan} {id}); "" = default
 
 

@@ -28,6 +28,7 @@ IDLE_CLOSE = 60  # seconds an unused shared pool stays open
 PAUSE_AFTER_RESET = 600  # Telegram cut our extra connections: one connection for 10 min
 MAX_PAUSE = 7 * 24 * 3600  # after repeated resets: extra connections stay off for a week
 MIN_SIZE = 2 * 1024 * 1024  # smaller files: normal transfer is fine
+ENABLED = True  # owner switch (Admin -> Limits): False = never open extra connections
 STATE_FILE = None  # set by the hub: remembers the pause across restarts (same network/IP)
 _state = {"fails": 0, "off": 0.0}
 
@@ -58,6 +59,31 @@ def _watch(snd) -> None:
     fut = getattr(snd, "_disconnected", None)
     if fut is not None:
         fut.add_done_callback(_consume)
+
+
+class _WrongSessionFilter(logging.Filter):
+    """After extra connections close, Telegram may still deliver their late replies on the main
+    connection; Telethon drops each one with a 'wrong session ID' warning. One line per minute."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.last, self.hidden = 0.0, 0
+
+    def filter(self, record) -> bool:
+        if "wrong session ID" not in record.getMessage():
+            return True
+        now = time.time()
+        if now - self.last < 60:
+            self.hidden += 1
+            return False
+        record.msg = ("Telegram sent late replies of closed extra connections (ignored, harmless)"
+                      + (f" - {self.hidden} more hidden" if self.hidden else ""))
+        record.args = ()
+        self.last, self.hidden = now, 0
+        return True
+
+
+logging.getLogger("telethon.network.mtprotosender").addFilter(_WrongSessionFilter())
 
 
 def _consume(fut) -> None:
@@ -93,6 +119,12 @@ async def open_pool(client, dc_id: int, n: int):
     senders = []
 
     async def close():
+        if home:  # tell Telegram these sessions are gone, so it stops sending their replies
+            for snd in senders:
+                try:
+                    await asyncio.wait_for(client(functions.DestroySessionRequest(snd._state.id)), 5)
+                except Exception:
+                    pass
         for snd in senders:
             try:
                 await snd.disconnect()
@@ -240,7 +272,7 @@ async def download(client, message, path: str,
     dc_id = dc_id or client.session.dc_id
     release = None
     exported = False
-    if pool and size >= POOL_SIZE and CONNECTIONS > 1 and not _paused(client):
+    if pool and ENABLED and size >= POOL_SIZE and CONNECTIONS > 1 and not _paused(client):
         try:
             callers, release = await acquire(client, dc_id)
             per = PER_CONNECTION
@@ -323,7 +355,7 @@ async def upload(client, path: str, progress: Optional[Callable[[int, int], None
     done = 0
     release = None
     callers, per = [client], WORKERS
-    if pool and size >= POOL_SIZE and CONNECTIONS > 1 and hasattr(client, "_get_dc") \
+    if pool and ENABLED and size >= POOL_SIZE and CONNECTIONS > 1 and hasattr(client, "_get_dc") \
             and not _paused(client):
         try:
             callers, release = await acquire(client, client.session.dc_id)

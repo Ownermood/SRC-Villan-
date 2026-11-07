@@ -43,7 +43,7 @@ HUB_CALLBACKS = {"lg", "hw", "otp", "ac", "lo", "LO", "LD", "bm", "bx", "gp", "b
                  "adp3",
                  "ad", "adm", "adu", "adv", "adb", "adl", "adp", "adj", "adx", "adt", "ap", "dn",
                  "apm", "apg", "apr", "apl", "atr", "apt", "apa", "apx", "abl", "abk", "aub", "abf", "abF", "abs",
-                 "aac", "alm", "asp", "aps", "apd", "aem", "aet"}
+                 "aac", "alm", "axc", "asp", "aps", "apd", "aem", "aet"}
 # reachable while a plan is expired (profile, logout, help, get premium)
 EXPIRED_OK = {"ac", "lo", "LO", "LD", "gp", "bp", "hw", "bx", "otp", "lg", "noop"}
 BOT_COMMANDS = {"start": "Open the control panel", "profile": "Plan, account, logout",
@@ -71,6 +71,7 @@ class Hub:
         self.acc = Accounts(DATA_DIR / "accounts.db", key)
         self.settings = self.acc.settings()
         emoji.set_enabled(self.settings.premium_emoji)
+        fast.ENABLED = self.settings.extra_connections
         self.ws: Dict[int, Tuple[App, Panel]] = {}
         self.logins: Dict[int, dict] = {}
         self.owner = self.secrets.owner_id or next(
@@ -959,6 +960,10 @@ class Hub:
             save()
             return await show(ui.admin_access(self))
         if k == "alm":
+            return await show(ui.admin_limits(self))
+        if k == "axc":
+            st.extra_connections = fast.ENABLED = not st.extra_connections
+            save()
             return await show(ui.admin_limits(self))
         if k in ("adj", "adx", "adt", "adp3"):
             up = parts[1] == "+"

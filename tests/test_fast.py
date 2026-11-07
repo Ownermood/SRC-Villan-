@@ -354,3 +354,28 @@ def test_shutdown_cancel_skips_finish_but_user_stop_runs_it():
         return finished, a, b
     finished, a, b = run(go())
     assert finished == [a.id] and b.state == "stopped" and not b.cancelled
+
+
+def test_extra_connections_switch_and_quiet_wrong_session_log(tmp_path, monkeypatch, caplog):
+    import logging
+    big = 11 * 1024 * 1024
+    data = os.urandom(big)
+    srv = FileServer(data)
+    opened = []
+
+    async def pool(client, dc_id, n):
+        opened.append(1)
+        raise RuntimeError("must not open")
+    monkeypatch.setattr(fast, "open_pool", pool)
+    monkeypatch.setattr(fast, "ENABLED", False)
+    out = run(fast.download(srv, doc_msg(big), str(tmp_path / "a.mp4")))
+    assert open(out, "rb").read() == data and not opened, "switched off: one connection only"
+    # Telethon's 'wrong session ID' warnings: one line per minute instead of a flood
+    lg = logging.getLogger("telethon.network.mtprotosender")
+    with caplog.at_level(logging.WARNING, logger="telethon.network.mtprotosender"):
+        for _ in range(20):
+            lg.warning("Security error while unpacking a received message: %s",
+                       "Server replied with a wrong session ID (see FAQ for details)")
+        lg.warning("something else")
+    msgs = [r.getMessage() for r in caplog.records if r.name == "telethon.network.mtprotosender"]
+    assert len(msgs) == 2 and "harmless" in msgs[0] and msgs[1] == "something else"

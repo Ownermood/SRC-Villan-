@@ -386,3 +386,16 @@ def test_live_stats_loop_edits_then_pauses(hubenv, monkeypatch):
         await hub._stats_task
     asyncio.run(go())
     assert len(edits) == 3 and "🟢 live" in edits[0] and "live view paused" in edits[-1]
+
+
+def test_extra_connections_switch_in_limits(hubenv):
+    from tgclone import fast
+    hub = hubenv.new_hub()
+    login(hub, OWNER, "+91000000001", env=hubenv)
+    ev = press(hub, "alm", OWNER)
+    assert "axc" in datas(ev.edits[-1][1])
+    press(hub, "axc", OWNER)
+    assert hub.settings.extra_connections is False and fast.ENABLED is False
+    assert hub.acc.settings().extra_connections is False, "saved"
+    press(hub, "axc", OWNER)
+    assert fast.ENABLED is True
