@@ -15,6 +15,7 @@ from tgclone.app import App
 from tgclone.config import Forward
 from tgclone.jobs import Job
 from tgclone.save import parse_link
+from tgclone import thumbs
 
 Screen = Tuple[str, Optional[list]]
 PAGE = 8
@@ -255,9 +256,49 @@ def settings_view(app: App) -> Screen:
         [B("➖", "sd:past:-"), B(f"⏱ Clone {c.past.delay:g}s", "noop"), B("➕", "sd:past:+")],
         [B("➖", "sd:save:-"), B(f"⏱ Save {c.save.delay:g}s", "noop"), B("➕", "sd:save:+")],
         [B("🎯 Save target", "sg"), B("↩️ Reset target", "sgc")],
+        [B("🖼 Thumbnail", "th", "primary")],
         [B("« Back", "m")],
     ]
     return text, buttons
+
+
+THUMB_MODES = {"original": "📌 Original", "custom": "🖼 My image", "none": "🚫 No thumbnail"}
+THUMB_TYPES_UI = [("video", "🎬 Video"), ("document", "📄 PDF / File"),
+                  ("audio", "🎵 Audio"), ("gif", "🎞 GIF")]
+
+
+def thumb_view(app: App) -> Screen:
+    t = app.cfg.thumb
+    custom = thumbs.has_custom()
+    warn = ""
+    if t.mode == "custom" and not custom:
+        warn = "\n⚠️ No image uploaded yet — originals are used until you upload one."
+    applies = ", ".join(label for key, label in THUMB_TYPES_UI if key in t.types) or "nothing"
+    text = (
+        "<b>🖼 Thumbnail</b>\n\n<blockquote>"
+        f"<b>Mode</b> · {THUMB_MODES.get(t.mode, t.mode)}\n"
+        f"<b>My image</b> · {'✅ uploaded' if custom else '— not set'}\n"
+        f"<b>Applies to</b> · {esc(applies)}</blockquote>\n"
+        "<i>📌 keeps the source thumbnail · 🖼 puts your image on every video/file · "
+        "🚫 sends without one.\nPhotos, stickers, voice and round videos can't have thumbnails. "
+        "🖼/🚫 re-upload files, so they are slower.</i>" + warn
+    )
+
+    def mode_btn(key):
+        on = t.mode == key
+        return B(("● " if on else "") + THUMB_MODES[key], f"thm:{key}", "primary" if on else None)
+
+    type_row = [B(f"{'✅' if key in t.types else '▫️'} {label}", f"tht:{key}",
+                  "success" if key in t.types else None) for key, label in THUMB_TYPES_UI]
+    buttons = [
+        [mode_btn("original")],
+        [mode_btn("custom"), mode_btn("none")],
+        [B("📤 Upload image", "thu", "success"), B("👁 Preview", "thp")],
+        type_row[:2], type_row[2:],
+        [B("🗑 Delete my image", "thd", "danger")] if custom else [],
+        [B("« Back", "st")],
+    ]
+    return text, [r for r in buttons if r]
 
 
 HELP = """<b>❔ How to use</b>
@@ -271,7 +312,8 @@ HELP = """<b>❔ How to use</b>
 <blockquote expandable><b>Text commands</b>
 /menu · /list · /add src dest… · /remove #n · /toggle #n
 /clone #n [fresh] · /clone src dest · /batch link count
-/jobs · /stop [id] · /setchat chat|off · /style name · /status</blockquote>"""
+/jobs · /stop [id] · /setchat chat|off · /style name · /status
+/thumb · /setthumb (send or reply to a photo) · /delthumb</blockquote>"""
 
 
 def wizard_prompt(kind: str, app: App, data: dict = None) -> Screen:
@@ -290,6 +332,10 @@ def wizard_prompt(kind: str, app: App, data: dict = None) -> Screen:
         return ("<b>📥 Save posts</b>\n\nSend a post link:\n<blockquote>"
                 "<code>https://t.me/channel/123</code>\n<code>https://t.me/c/1234567/123</code>\n"
                 "Range: <code>https://t.me/c/1234567/10-60</code></blockquote>", cancel)
+    if kind == "thumb":
+        return ("<b>📤 Upload thumbnail</b>\n\nSend a <b>photo</b> (or an image file). "
+                "It's resized to 320px JPEG automatically and used for videos, PDFs/files, "
+                "audio covers and GIFs.", [[B("✖️ Cancel", "th")]])
     if kind == "target":
         return ("<b>🎯 Save target</b>\n\nForward a message from the chat where saved posts "
                 "should go, or send @username / -100id.", cancel)

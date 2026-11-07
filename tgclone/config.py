@@ -107,6 +107,11 @@ class SaveSettings(BaseModel):
     delay: float = Field(1.0, ge=0, le=60)
 
 
+class ThumbSettings(BaseModel):
+    mode: str = "original"  # original | custom | none
+    types: List[str] = ["video", "document", "audio", "gif"]  # where the mode applies
+
+
 class Config(BaseModel):
     admins: List[ChatRef] = []
     forwards: List[Forward] = []
@@ -119,6 +124,7 @@ class Config(BaseModel):
     live: LiveSettings = LiveSettings()
     past: PastSettings = PastSettings()
     save: SaveSettings = SaveSettings()
+    thumb: ThumbSettings = ThumbSettings()
     plugins: PluginConfig = PluginConfig()
 
 

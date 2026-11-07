@@ -106,7 +106,7 @@ def test_non_admin_blocked():
     ev = run(press(p, "m", sender=999))
     assert ev.answers == [("⛔ Not authorized", True)] and not ev.edits
     ev = run(say(p, "/list", sender=999))
-    assert ev.out == [("⛔ Not authorized.", None)]
+    assert ev.out == [("⛔ Not authorized.", None, None)]
 
 
 def test_plugins_and_filetypes():

@@ -12,7 +12,7 @@ import yaml
 from telethon import events, functions, types, utils
 from telethon.errors import MessageNotModifiedError
 
-from tgclone import ui
+from tgclone import thumbs, ui
 from tgclone.app import App, run_forward
 from tgclone.config import Forward, norm_ref
 from tgclone.jobs import Job
@@ -23,7 +23,8 @@ log = logging.getLogger("tgclone")
 BOT_COMMANDS = {
     "menu": "Open control panel", "list": "List forwards", "add": "Add forward: src dest…",
     "clone": "Clone history: #n [fresh]", "batch": "Save posts: link count", "jobs": "Running jobs",
-    "stop": "Stop job(s)", "status": "Bot status", "help": "How to use",
+    "stop": "Stop job(s)", "thumb": "Thumbnail settings", "setthumb": "Upload your thumbnail",
+    "delthumb": "Remove your thumbnail", "status": "Bot status", "help": "How to use",
 }
 
 
@@ -87,6 +88,28 @@ class Panel:
         if fwd and fwd.from_id is None and not msg.raw_text:
             raise ValueError("This chat hides its origin. Send its link or -100id instead.")
         return ui.chat_from_text(msg.raw_text)
+
+    async def image_from(self, msg) -> bytes:
+        """Bytes of a photo / image document in msg (or the message it replies to)."""
+        for m in (msg, await msg.get_reply_message() if getattr(msg, "is_reply", False) else None):
+            if m is None:
+                continue
+            doc = m.document
+            is_img = m.photo or (doc is not None and (doc.mime_type or "").startswith("image/"))
+            if is_img:
+                if getattr(m.file, "size", 0) and m.file.size > 10 * 1024 * 1024:
+                    raise ValueError("Image too big (max 10 MB)")
+                return await self.c.download_media(m, file=bytes)
+        raise ValueError("Send a photo (or an image file).")
+
+    async def set_thumb(self, event, msg):
+        size = thumbs.save_custom(await self.image_from(msg))
+        self.app.cfg.thumb.mode = "custom"
+        self.save()
+        self.state.pop(event.sender_id, None)
+        await event.respond(f"✅ Thumbnail saved ({size // 1024} KB) and mode set to <b>My image</b>.",
+                            file=str(thumbs.CUSTOM_THUMB), parse_mode="html")
+        return await self.show(event, ui.thumb_view(self.app))
 
     # ------------------------------------------------------------- jobs
     async def run_job(self, event, job: Job, fn):
@@ -216,6 +239,20 @@ class Panel:
             if len(parts) > 1:
                 last = first + int(parts[1]) - 1
             return await self.start_save(event, chat, first, last)
+        if name == "thumb":
+            return await self.show(event, ui.thumb_view(app))
+        if name == "setthumb":
+            try:
+                return await self.set_thumb(event, event.message)
+            except ValueError:
+                self.state[event.sender_id] = {"kind": "thumb"}
+                return await self.show(event, ui.wizard_prompt("thumb", app))
+        if name == "delthumb":
+            thumbs.delete_custom()
+            if app.cfg.thumb.mode == "custom":
+                app.cfg.thumb.mode = "original"
+            self.save()
+            return await event.respond("🗑 Your thumbnail was removed. Mode: 📌 Original.")
         if name == "jobs":
             return await self.show(event, ui.jobs_view(app))
         if name in ("stop", "cancel"):
@@ -371,6 +408,41 @@ class Panel:
                 sec.delay = ui.step(sec.delay, parts[2] == "+")
                 self.save()
                 return await self.show(event, ui.settings_view(app), edit=True)
+            # thumbnail
+            if k == "th":
+                self.state.pop(uid, None)
+                return await self.show(event, ui.thumb_view(app), edit=True)
+            if k == "thm":
+                if parts[1] not in ui.THUMB_MODES:
+                    return await event.answer("Unknown mode")
+                app.cfg.thumb.mode = parts[1]
+                self.save()
+                if parts[1] == "custom" and not thumbs.has_custom():
+                    self.state[uid] = {"kind": "thumb"}
+                    await event.answer("Now send your image")
+                    return await self.show(event, ui.wizard_prompt("thumb", app), edit=True)
+                await event.answer(ui.THUMB_MODES[parts[1]])
+                return await self.show(event, ui.thumb_view(app), edit=True)
+            if k == "thu":
+                self.state[uid] = {"kind": "thumb"}
+                return await self.show(event, ui.wizard_prompt("thumb", app), edit=True)
+            if k == "thp":
+                if not thumbs.has_custom():
+                    return await event.answer("No image uploaded yet", alert=True)
+                await event.answer()
+                return await event.respond("👁 Your current thumbnail", file=str(thumbs.CUSTOM_THUMB))
+            if k == "thd":
+                thumbs.delete_custom()
+                if app.cfg.thumb.mode == "custom":
+                    app.cfg.thumb.mode = "original"
+                self.save()
+                await event.answer("🗑 Removed")
+                return await self.show(event, ui.thumb_view(app), edit=True)
+            if k == "tht":
+                tl = app.cfg.thumb.types
+                tl.remove(parts[1]) if parts[1] in tl else tl.append(parts[1])
+                self.save()
+                return await self.show(event, ui.thumb_view(app), edit=True)
             if k == "sg":
                 self.state[uid] = {"kind": "target"}
                 return await self.show(event, ui.wizard_prompt("target", app), edit=True)
@@ -414,6 +486,8 @@ class Panel:
                     raise ValueError("That's not a post link. Example: https://t.me/c/123456/78")
                 self.state.pop(uid, None)
                 return await self.start_save(event, *link)
+            if kind == "thumb":
+                return await self.set_thumb(event, msg)
             if kind == "target":
                 ref = await self.chat_from_message(msg)
                 await app.control.get_input_entity(ref)
@@ -463,7 +537,8 @@ class Panel:
     async def setup(self):
         prefix = "/" if self.is_bot else r"\."
         names = ["start", "menu", "help", "list", "add", "forward", "remove", "toggle", "style",
-                 "setchat", "clone", "batch", "jobs", "stop", "cancel", "status"]
+                 "setchat", "clone", "batch", "jobs", "stop", "cancel", "status",
+                 "thumb", "setthumb", "delthumb"]
         pattern = rf"^{prefix}({'|'.join(names)})(?:@\w+)?(?:\s+([\s\S]*))?$"
         kw = {"pattern": pattern} if self.is_bot else {"pattern": pattern, "outgoing": True}
 

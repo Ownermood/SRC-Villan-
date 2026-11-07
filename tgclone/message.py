@@ -2,13 +2,16 @@
 
 import asyncio
 import logging
+import mimetypes
 import os
 from typing import List, Optional
 
 from telethon import TelegramClient
 from telethon.errors import ChatForwardsRestrictedError, FloodWaitError, ServerError
+from telethon.tl import types
 from telethon.tl.custom.message import Message
 
+from tgclone import thumbs
 from tgclone.config import DOWNLOAD_DIR, Config
 
 log = logging.getLogger("tgclone")
@@ -160,13 +163,35 @@ def _file_kwargs(tm: CloneMessage) -> dict:
     return kw
 
 
+async def _uploaded_doc(client: TelegramClient, tm: CloneMessage, path: str,
+                        thumb: Optional[str], up) -> types.InputMediaUploadedDocument:
+    """Pre-uploaded document with our thumbnail (send_file can't set thumbs in albums)."""
+    doc = tm.message.document
+    handle = await retry(client.upload_file, path, progress_callback=up)
+    thumb_h = await retry(client.upload_file, thumb) if thumb else None
+    mime = getattr(doc, "mime_type", None) or mimetypes.guess_type(path)[0] \
+        or "application/octet-stream"
+    attrs = list(doc.attributes) if doc is not None else \
+        [types.DocumentAttributeFilename(os.path.basename(path))]
+    return types.InputMediaUploadedDocument(
+        file=handle, mime_type=mime, attributes=attrs, thumb=thumb_h,
+        force_file=True if tm.file_type == "document" else None)
+
+
 async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
                 reply_to: Optional[int], download: bool, cfg: Config, progress=None) -> list:
     up = (lambda c, t: progress("up", c, t)) if progress else None
     if len(tms) > 1:  # album
-        files = [tm.new_file or (await tm.download(cfg.max_file_mb, cfg.max_disk_mb, progress)
-                                 if download else tm.message.media)
-                 for tm in tms]
+        files = []
+        for tm in tms:
+            if not download:
+                files.append(tm.message.media)
+                continue
+            path = tm.new_file or await tm.download(cfg.max_file_mb, cfg.max_disk_mb, progress)
+            if tm.message.document is not None and tm.file_type in thumbs.THUMB_TYPES:
+                files.append(await _uploaded_doc(client, tm, path, await thumbs.pick(cfg, tm), up))
+            else:
+                files.append(path)
         return _as_list(await retry(client.send_file, dest, files,
                                     caption=[tm.text for tm in tms], reply_to=reply_to,
                                     progress_callback=up if download else None))
@@ -181,10 +206,13 @@ async def _copy(client: TelegramClient, dest: int, tms: List[CloneMessage],
     if tm.new_file or (download and tm.file_type in FILE_TYPES):
         path = tm.new_file or await tm.download(cfg.max_file_mb, cfg.max_disk_mb, progress)
         kw = {} if tm.new_file else _file_kwargs(tm)
+        thumb = None
         if not tm.new_file:
-            thumb = await tm.download_thumb()
-            if thumb:
-                kw["thumb"] = thumb
+            thumb = await thumbs.pick(cfg, tm)
+        elif thumbs.policy(cfg, tm.file_type) == "custom":
+            thumb = str(thumbs.CUSTOM_THUMB)
+        if thumb:
+            kw["thumb"] = thumb
         return _as_list(await retry(client.send_file, dest, path, caption=text,
                                     formatting_entities=ents, reply_to=reply_to,
                                     progress_callback=up, **kw))
@@ -205,7 +233,8 @@ async def send(client: TelegramClient, dest: int, tms: List[CloneMessage], cfg: 
     progress(direction, current, total) is called during download ("down") / upload ("up").
     """
     protected = any(tm.message.noforwards for tm in tms)
-    if cfg.forward_mode and same_client and not protected:
+    rethumb = any(thumbs.needs_reupload(cfg, tm.file_type) for tm in tms)
+    if cfg.forward_mode and same_client and not protected and not rethumb:
         try:
             return _as_list(await retry(client.forward_messages, dest,
                                         [tm.message for tm in tms]))
@@ -213,7 +242,8 @@ async def send(client: TelegramClient, dest: int, tms: List[CloneMessage], cfg: 
             protected = True
 
     # media references only work for the account that read them and non-protected chats
-    must_download = protected or not same_client
+    # custom / removed thumbnail also needs a fresh upload
+    must_download = protected or not same_client or rethumb
     if must_download and not cfg.protected_fallback and protected:
         raise ChatForwardsRestrictedError(None)
     try:

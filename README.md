@@ -54,12 +54,14 @@ Send `/start` to the bot. Everything works with buttons. The colored buttons nee
 - **⏳ Jobs**: live progress card with a ▰▱ bar, done/failed counts, speed, ETA and the current file's ⬇️/⬆️ MB/s. Each job has its own ⛔ Stop button. Up to `max_jobs` run at once, and the same clone can never run twice.
 - **🧩 Plugins**: on/off toggles (applied instantly, no restart), style switcher, file-type grid (tap to block), editors for blocked words, required words, replace rules, header and footer.
 - **⚙️ Settings**: copy or forward mode, protected-chat fallback, send via bot, edit and delete sync, ➖/➕ delays, save target.
+- **🖼 Thumbnail** (in Settings): 📌 keep the original, 🖼 use your own image, or 🚫 send without one. Choose the types it applies to: 🎬 video, 📄 PDF/file, 🎵 audio cover, 🎞 GIF (photos, stickers, voice and round videos can't have one). Upload by sending a photo. It is auto-converted to a Telegram-valid JPEG (≤320px, ≤200 KB). Shortcuts: send a photo with the caption `/setthumb`, or use `/delthumb`. It applies to live forwarding, history clone and saved posts, albums included. Custom/none modes re-upload files, so they are slower than a plain copy.
 
 Text commands still work (and are the only option for a user account without a bot, using the `.` prefix):
 
 ```
 /menu /list /add <src> <dest..> /remove <#n|src> /toggle <#n> /clone <#n> [fresh]
 /clone <src> <dest> /batch <link> <count> /jobs /stop [id] /setchat <chat|off> /style <s> /status
+/thumb /setthumb (photo caption or reply) /delthumb
 ```
 
 ## Config (`tgclone.config.json`)
@@ -76,6 +78,7 @@ Text commands still work (and are the only option for a user account without a b
   "live": {"edit_sync": true, "delete_sync": false, "delete_on_edit": ".deleteMe"},
   "past": {"delay": 1.0, "batch_size": 0, "batch_sleep": 0},
   "save": {"target": "", "use_plugins": false, "max_batch": 1000, "delay": 1.0},
+  "thumb": {"mode": "original", "types": ["video", "document", "audio", "gif"]},
   "plugins": {
     "filter":  {"check": false, "users": {"blacklist": [], "whitelist": []},
                 "files": {"blacklist": ["sticker"], "whitelist": []},

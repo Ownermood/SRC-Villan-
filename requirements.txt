@@ -3,6 +3,7 @@ cryptg>=0.4            # fast encryption for downloads/uploads
 pydantic>=2.5,<3
 python-dotenv>=1.0
 PyYAML>=6.0
+Pillow>=10.0           # custom thumbnails (resize to Telegram 320px JPEG)
 # optional plugins
 # pytesseract + Pillow   -> ocr plugin (needs tesseract binary)
 # watermark.py           -> mark plugin (needs ffmpeg)

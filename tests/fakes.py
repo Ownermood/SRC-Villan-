@@ -29,6 +29,10 @@ class Msg:
             self.photo = _t.SimpleNamespace(id=doc_id or id * 1000)
         self.file = _t.SimpleNamespace(size=size)
         self.deleted = False
+        self.is_reply = False
+
+    async def get_reply_message(self):
+        return None
 
     async def download_media(self, file, thumb=None, progress_callback=None):
         name = f"t{self.id}.jpg" if thumb is not None else f"m{self.id}.bin"
@@ -77,6 +81,13 @@ class Client:
     async def delete_messages(self, dest, mid):
         self.calls.append(("del", dest, mid))
 
+    async def upload_file(self, path, progress_callback=None):
+        self.calls.append(("upload", path))
+        return f"H:{path}"
+
+    async def download_media(self, msg, file=None):
+        return msg.image_bytes
+
     async def get_peer_id(self, ref):
         return int(ref) if str(ref).lstrip("-").isdigit() else 42
 
@@ -108,13 +119,14 @@ class Sent:
 
 
 class TextEvent:
-    def __init__(self, text, sender=1, fwd_from=None):
+    def __init__(self, text, sender=1, fwd_from=None, image=None):
         self.raw_text, self.sender_id, self.is_private, self.chat_id = text, sender, True, 1
-        self.message = Msg(1, text, fwd_from=fwd_from)
+        self.message = Msg(1, text, fwd_from=fwd_from, kind="photo" if image else None)
+        self.message.image_bytes = image
         self.out = []
 
     async def respond(self, text, **kw):
-        self.out.append((text, kw.get("buttons")))
+        self.out.append((text, kw.get("buttons"), kw.get("file")))
         return Sent()
 
 
