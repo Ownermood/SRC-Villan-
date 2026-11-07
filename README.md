@@ -13,6 +13,23 @@ Not kept (on purpose): premium/payment/redeem codes, ad shortener, `/eval` (remo
 speedtest, broadcast, yt-dlp downloader, MongoDB, multi-user session storage, Dropbox-hosted
 pyrogram forks and `devgagantools` (unverifiable dependencies), obfuscated promo strings.
 
+## Screenshots
+
+![Main menu, forwards, jobs](docs/screenshots/tgclone_ui_1.png)
+![Plugins, settings, thumbnail](docs/screenshots/tgclone_ui_2.png)
+
+## Ubuntu quick start
+
+**Full step-by-step guide (Hinglish): [docs/UBUNTU_SETUP.md](docs/UBUNTU_SETUP.md)**
+
+```bash
+git clone -b ccr-1f6db1cf-flau3n https://github.com/Ownermood/SRC-Villan-.git && cd SRC-Villan-
+bash scripts/install_ubuntu.sh --service   # packages + venv + systemd service
+nano .env                                  # API_ID, API_HASH, BOT_TOKEN, ADMINS
+.venv/bin/python -m tgclone login          # paste SESSION_STRING into .env
+sudo systemctl start tgclone               # runs 24x7, send /start to your bot
+```
+
 ## Setup
 
 ```bash
