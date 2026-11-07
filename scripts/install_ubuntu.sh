@@ -30,7 +30,16 @@ else
 fi
 mkdir -p data
 
-if [ "${1:-}" = "--service" ]; then
+if [ "${1:-}" = "--service" ] && [ ! -d /run/systemd/system ]; then
+    echo "==> 4/4 systemd is not running here (WSL or container) - service skipped"
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+        echo "    WSL: enable systemd once, then re-run this script with --service:"
+        echo "      printf '[boot]\\nsystemd=true\\n' | sudo tee /etc/wsl.conf"
+        echo "      (in Windows PowerShell)  wsl --shutdown   -> reopen Ubuntu"
+    fi
+    echo "    Or run in background without systemd:"
+    echo "      tmux new -s tgclone '.venv/bin/python -m tgclone live'   (detach: Ctrl+B then D)"
+elif [ "${1:-}" = "--service" ]; then
     echo "==> 4/4 systemd service (user: $RUN_USER, dir: $APP_DIR)"
     $SUDO tee /etc/systemd/system/tgclone.service >/dev/null <<UNIT
 [Unit]

@@ -96,6 +96,16 @@ Sab theek ho to `Ctrl+C` se band karo, aur Step 6 se 24×7 chalao.
 
 ## Step 6 — 24×7 chalao (service)
 
+> **WSL (Windows) par ho?** WSL mein systemd default band hota hai. Ek baar on karo:
+> ```bash
+> printf '[boot]\nsystemd=true\n' | sudo tee /etc/wsl.conf
+> ```
+> Phir **Windows PowerShell** mein `wsl --shutdown`, Ubuntu dobara kholo, aur
+> `bash scripts/install_ubuntu.sh --service` dobara chalao.
+> Bina systemd ke: `tmux new -s tgclone '.venv/bin/python -m tgclone live'` (detach: `Ctrl+B` phir `D`, wapas: `tmux attach -t tgclone`).
+> ⚠️ WSL tabhi chalta hai jab PC on ho aur sleep mein na ho. Asli 24×7 ke liye VPS best hai.
+
+
 ```bash
 sudo systemctl start tgclone        # start
 sudo systemctl status tgclone       # chal raha hai? (q se bahar)
