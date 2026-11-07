@@ -35,7 +35,8 @@ Update: `git pull && .venv/bin/pip install -r requirements.txt -q`, then restart
 **Cloning & speed**
 - Full history, oldest first, albums kept together, replies linked, pins copied (the "pinned a message" notice is deleted at once), polls and quizzes copied.
 - **Turbo copy**: plain posts are copied server-side, **100 per request**, with no download and no "Forwarded from" tag.
-- **Protected chats**: each file is downloaded and re-uploaded, keeping its thumbnail, name and duration. Transfers use 512 KB parts with 8 in flight at once, and the next files download while the current one uploads.
+- **Protected chats**: each file is downloaded and re-uploaded, keeping its thumbnail, name and duration. Big files (10 MB and up) use **4 connections × 4 parts in flight** (512 KB parts). The next files download while the current one uploads, and several destinations are sent at the same time (the file is downloaded once).
+- **Fast restart**: the bot answers at once, users load in parallel, the chats a user works with are remembered (no full dialog download), and pending jobs resume within a second.
 - No fixed pause between posts. If Telegram asks to wait (FloodWait), the bot waits and continues.
 - **Resumable**: progress is stored. A stopped, crashed or restarted clone continues by itself, and nothing is sent twice.
 

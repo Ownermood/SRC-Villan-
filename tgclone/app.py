@@ -98,11 +98,46 @@ class App:
         self.sender = bot if (self.cfg.send_via_bot and bot) else user
         self.control = bot or user
         self.admins = {self.uid}
+        self.preload_peers()  # chats we used before: usable at once, no dialog download
+        self._dialogs = asyncio.ensure_future(self._warm_dialogs())  # titles etc., in background
+        await self.load_forwards()
+
+    async def _warm_dialogs(self) -> None:
         try:
-            await user.get_dialogs()
+            await self.user.get_dialogs()
         except Exception as e:
             log.warning("get_dialogs failed for %s: %s", self.uid, e)
-        await self.load_forwards()
+
+    def preload_peers(self) -> None:
+        session = getattr(self.reader, "session", None)
+        rows = getattr(session, "_entities", None)
+        if rows is None:
+            return
+        for pid, h in self.store.peers():
+            rows.add((pid, h, None, None, None))
+
+    async def remember(self, *peer_ids) -> None:
+        """Save chats' access hashes so they work right after a restart."""
+        for pid in peer_ids:
+            try:
+                ip = await self.reader.get_input_entity(pid)
+            except Exception:
+                continue
+            h = getattr(ip, "access_hash", None)
+            if h is not None:
+                self.store.save_peer(int(pid), h)
+
+    async def ensure_peers(self, *peer_ids) -> None:
+        """A chat not cached yet: wait for the background dialog list once, then go on."""
+        for pid in peer_ids:
+            try:
+                await self.reader.get_input_entity(pid)
+            except Exception:
+                task = getattr(self, "_dialogs", None)
+                if task is not None:
+                    await asyncio.wait([task], timeout=120)
+                break
+        await self.remember(*peer_ids)
 
     async def attach_bot(self, bot: TelegramClient) -> None:
         """Multi-user without login: the shared bot reads (live only) and sends."""
@@ -177,6 +212,7 @@ class App:
             if self.blocked(src):
                 log.warning("Forward from %s skipped: blocked by the owner", src)
                 continue
+            asyncio.ensure_future(self.remember(src, *dests))
             mapping.setdefault(src, [])
             mapping[src] += [d for d in dests if d not in mapping[src] and d != src]
         self.from_to = mapping
@@ -225,30 +261,32 @@ class App:
         first = tms[0].message
         src_topic = topic_of(first)
         replied = reply_target(first)
-        done = 0
-        try:
-            for d in dests:
-                if skip_done and self.store.get_one(src, first.id, d) is not None:
-                    continue  # already cloned (resume after crash)
-                topic = None
-                if src_topic:
-                    try:
-                        topic = await self.topics.dest_topic(src, src_topic, d)
-                    except Exception as e:
-                        log.warning("Topic for %s:%s -> %s failed: %s", src, src_topic, d, e)
-                reply_to = self.store.get_one(src, replied, d) if replied else None
-                sent = await self._send_premium_via_bot(d, tms, reply_to or topic, progress, topic)
+
+        async def one(d) -> int:
+            if skip_done and self.store.get_one(src, first.id, d) is not None:
+                return 0  # already cloned (resume after crash)
+            topic = None
+            if src_topic:
                 try:
-                    if sent is None:
-                        sent = await send(self.sender, d, tms, self.cfg, reply_to or topic,
-                                          same_client=self.sender is self.reader,
-                                          progress=progress, topic=topic)
+                    topic = await self.topics.dest_topic(src, src_topic, d)
                 except Exception as e:
-                    log.error("Send %s:%s -> %s failed: %s", src, first.id, d, e)
-                    continue
-                for tm, s in zip(tms, sent):
-                    self.store.add(src, tm.message.id, d, s.id, media_key(tm.message))
-                done += 1
+                    log.warning("Topic for %s:%s -> %s failed: %s", src, src_topic, d, e)
+            reply_to = self.store.get_one(src, replied, d) if replied else None
+            try:
+                sent = await self._send_premium_via_bot(d, tms, reply_to or topic, progress, topic)
+                if sent is None:
+                    sent = await send(self.sender, d, tms, self.cfg, reply_to or topic,
+                                      same_client=self.sender is self.reader,
+                                      progress=progress, topic=topic)
+            except Exception as e:
+                log.error("Send %s:%s -> %s failed: %s", src, first.id, d, e)
+                return 0
+            for tm, s in zip(tms, sent):
+                self.store.add(src, tm.message.id, d, s.id, media_key(tm.message))
+            return 1
+
+        try:  # every destination at the same time (a file is downloaded only once)
+            done = sum(await asyncio.gather(*(one(d) for d in dests)))
         finally:
             for tm in tms:
                 tm.cleanup()
@@ -315,6 +353,7 @@ async def run_forward(app: App, fwd: Forward, fresh: bool = False,
         raise ValueError("This chat can't be cloned (blocked by the owner).")
     src = await app.resolve(fwd.source)
     dests = [await app.resolve(d) for d in fwd.dest]
+    await app.ensure_peers(src, *dests)
     key = app.store.key(src, dests)
     if fresh:
         app.store.clear(src, dests)

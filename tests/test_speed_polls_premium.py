@@ -557,3 +557,65 @@ def test_start_text_and_premium_jobs(hubenv):
     assert hub.settings.user_max_jobs == 1 and hub.settings.premium_max_jobs == 3
     press(hub, "adp3:+", OWNER)
     assert hub.settings.premium_max_jobs == 4
+
+
+def test_restart_reaches_chats_without_reading_all_dialogs():
+    from fakes import Client as C
+
+    class Acc(C):
+        def __init__(self):
+            super().__init__()
+            self.session = _t.SimpleNamespace(_entities=set())
+
+        async def get_input_entity(self, pid):
+            for row in self.session._entities:
+                if row[0] == pid:
+                    return types.InputPeerChannel(channel_id=abs(pid) % 10 ** 10, access_hash=row[1])
+            if pid == -1001:
+                return types.InputPeerChannel(channel_id=1, access_hash=777)
+            raise ValueError("Could not find the input entity")
+    a = make_app(Acc())
+    run(a.remember(-1001, -1009))
+    assert a.store.peers() == [(-1001, 777)], "only reachable chats are saved"
+    b = make_app(Acc())
+    b.store = a.store
+    b.preload_peers()
+    assert (-1001, 777, None, None, None) in b.reader.session._entities, "known right after restart"
+
+
+def test_restoring_users_get_a_wait_message(hubenv):
+    from test_hub import press, say
+    hub = hubenv.new_hub()
+    hub.restoring = {5}
+    ev = say(hub, "/start", 5)
+    assert "just restarted" in ev.out[-1][0]
+    ev = press(hub, "fl:0", 5)
+    assert "just restarted" in ev.answers[-1][0]
+    hub.restoring.clear()
+    assert "just restarted" not in say(hub, "/start", 5).out[-1][0]
+
+
+def test_destinations_are_sent_at_the_same_time():
+    from fakes import Client as C
+    active, peak = [0], [0]
+
+    class Slow(C):
+        async def send_file(self, dest, f, caption=None, **kw):
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+            await asyncio.sleep(0.05)
+            active[0] -= 1
+            return await super().send_file(dest, f, caption=caption, **kw)
+    downloads = []
+
+    class M(Msg):
+        async def download_media(self, file, thumb=None, progress_callback=None):
+            if thumb is None:
+                downloads.append(1)
+            await asyncio.sleep(0.01)
+            return await super().download_media(file, thumb, progress_callback)
+    a = make_app(Slow())
+    m = M(1, "v", media="M", kind="video", noforwards=True, chat_id=-1)
+    n = run(a.deliver(-1, [CloneMessage(m)], [7, 8, 9]))
+    assert n == 3 and peak[0] == 3, "3 destinations in parallel"
+    assert len(downloads) == 1, "the file is downloaded once for all destinations"

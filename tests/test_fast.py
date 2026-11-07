@@ -88,3 +88,47 @@ def test_parallel_upload_parts(tmp_path):
     assert isinstance(handle, types.InputFileBig) and handle.parts == len(srv.parts)
     assert b"".join(srv.parts[i] for i in range(handle.parts)) == data
     assert srv.max_inflight > 1
+
+
+def test_big_files_use_several_connections(tmp_path, monkeypatch):
+    big = 12 * 1024 * 1024 + 99
+    data = os.urandom(big)
+    srv = FileServer(data)
+    used, closed = [], []
+
+    async def fake_pool(client, dc_id, n):
+        def caller(i):
+            async def call(req):
+                used.append(i)
+                if type(req).__name__ == "GetFileRequest":
+                    return await srv._call("pool", req)
+                return await srv(req)
+            return call
+        async def close():
+            closed.append(n)
+        return [caller(i) for i in range(n)], close
+    monkeypatch.setattr(fast, "open_pool", fake_pool)
+    out = run(fast.download(srv, doc_msg(big), str(tmp_path / "big.mp4")))
+    assert open(out, "rb").read() == data
+    assert set(used) == {0, 1, 2, 3}, "parts spread over 4 connections"
+    assert srv.max_inflight >= 8 and closed == [4] and srv.borrowed == 0
+    used.clear()
+    f = tmp_path / "up.bin"
+    f.write_bytes(data)
+    srv.parts.clear()
+    srv._get_dc = lambda dc: None
+    handle = run(fast.upload(srv, str(f)))
+    assert b"".join(srv.parts[i] for i in range(handle.parts)) == data
+    assert set(used) == {0, 1, 2, 3} and closed == [4, 4]
+
+
+def test_pool_failure_falls_back_to_one_connection(tmp_path, monkeypatch):
+    big = 11 * 1024 * 1024
+    data = os.urandom(big)
+    srv = FileServer(data)
+
+    async def broken(client, dc_id, n):
+        raise RuntimeError("no extra connections here")
+    monkeypatch.setattr(fast, "open_pool", broken)
+    out = run(fast.download(srv, doc_msg(big), str(tmp_path / "b.mp4")))
+    assert open(out, "rb").read() == data and srv.borrowed == srv.returned == 1

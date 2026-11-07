@@ -76,6 +76,7 @@ class Hub:
             (int(a) for a in self.secrets.admins if a.lstrip("-").isdigit()), 0)
         self.started = time.time()
         self.admin_wait: Optional[dict] = None  # owner is typing a value for an admin tool
+        self.restoring: set = set()  # users whose saved login is still being loaded at start
         self._bot_handlers: Dict[int, list] = {}  # bot-only users' live handlers on the shared bot
         self._start_media = None  # cached uploaded start photo
         self.owner_username = ""  # for the "Message the owner" button
@@ -102,6 +103,9 @@ class Hub:
         log.info("Bot @%s started", getattr(me, "username", "?"))
         self.bot_name = " ".join(filter(None, [getattr(me, "first_name", ""), getattr(me, "last_name", "")])) \
             or getattr(me, "username", "") or "SRC Villan Bot"
+        # answer buttons right away; users are loaded below (in parallel) while the bot already works
+        self.restoring = set(self.acc.botmode_users()) | {uid for uid, _ in self.acc.sessions()}
+        self.register()
 
         if self.secrets.session_string:  # legacy: owner session from .env
             client = self.make_client(self.secrets.session_string)
@@ -120,17 +124,30 @@ class Hub:
             except Exception:
                 pass
 
-        for uid, session in self.acc.sessions():
-            if uid not in self.ws:
-                await self._restore(uid, session)
-        for uid in self.acc.botmode_users():
-            if uid not in self.ws:
-                try:
-                    await self.open_bot_workspace(uid)
-                except Exception as e:
-                    log.warning("Bot-only user %s not restored: %s", uid, e)
+        sem = asyncio.Semaphore(5)
 
-        self.register()
+        async def restore(uid, session):
+            async with sem:
+                try:
+                    if uid not in self.ws:
+                        await self._restore(uid, session)
+                finally:
+                    self.restoring.discard(uid)
+
+        async def restore_bot(uid):
+            try:
+                if uid not in self.ws:
+                    await self.open_bot_workspace(uid)
+            except Exception as e:
+                log.warning("Bot-only user %s not restored: %s", uid, e)
+            finally:
+                self.restoring.discard(uid)
+
+        started = time.time()
+        await asyncio.gather(*(restore(u, s) for u, s in self.acc.sessions()),
+                             *(restore_bot(u) for u in self.acc.botmode_users()))
+        self.restoring.clear()
+        log.info("Users loaded in %.1fs", time.time() - started)
         await self._set_commands()
         self._tasks.append(asyncio.create_task(self._housekeeping()))
         log.info("Hub ready: %s user(s) online, mode=%s", len(self.ws), self.settings.mode)
@@ -235,7 +252,7 @@ class Hub:
         self._tasks.append(asyncio.create_task(self.resume_jobs(uid)))
         return app
 
-    async def resume_jobs(self, uid: int, delay: float = 3) -> int:
+    async def resume_jobs(self, uid: int, delay: float = 0.5) -> int:
         """Clones / saves that were running when the bot stopped continue by themselves."""
         await asyncio.sleep(delay)
         item = self.ws.get(uid)
@@ -555,6 +572,13 @@ class Hub:
                 await event.answer("🚫 You are banned from this bot.", alert=True)
             else:
                 await event.respond("🚫 You are banned from this bot.")
+            return False
+        if event.sender_id in self.restoring and event.sender_id not in self.ws:
+            msg = "⏳ The bot just restarted — loading your account, try again in a few seconds."
+            if isinstance(event, events.CallbackQuery.Event):
+                await event.answer(msg, alert=True)
+            else:
+                await event.respond(msg)
             return False
         return True
 

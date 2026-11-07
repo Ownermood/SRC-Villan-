@@ -91,6 +91,7 @@ class CloneMessage:
         self.file_type = file_type(message)
         self.new_file: Optional[str] = None  # replaces original media (watermark)
         self._downloaded: Optional[str] = None
+        self._lock: Optional[asyncio.Lock] = None
         self._temp: List[str] = []
 
     @property
@@ -98,9 +99,17 @@ class CloneMessage:
         return self.text != self._orig
 
     async def download(self, max_mb: int = 0, max_disk_mb: int = 0, progress=None) -> str:
-        """Download media once (cached), returns local path."""
+        """Download media once (cached, safe when several destinations ask at once)."""
         if self._downloaded:
             return self._downloaded
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        async with self._lock:
+            if self._downloaded:
+                return self._downloaded
+            return await self._download(max_mb, max_disk_mb, progress)
+
+    async def _download(self, max_mb: int, max_disk_mb: int, progress) -> str:
         if self.file_type not in FILE_TYPES:
             raise FileNotFoundError("message has no downloadable file")
         size = getattr(self.message.file, "size", 0) or 0

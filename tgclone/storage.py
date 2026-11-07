@@ -17,6 +17,7 @@ class Store:
                 PRIMARY KEY (src_chat, src_id, dest_chat));
             CREATE TABLE IF NOT EXISTS progress(key TEXT PRIMARY KEY, last_id INTEGER);
             CREATE TABLE IF NOT EXISTS pending_jobs(key TEXT PRIMARY KEY, kind TEXT, data TEXT);
+            CREATE TABLE IF NOT EXISTS peers(id INTEGER PRIMARY KEY, hash INTEGER);
             CREATE TABLE IF NOT EXISTS topic_map(
                 src_chat INTEGER, src_topic INTEGER, dest_chat INTEGER, dest_topic INTEGER,
                 PRIMARY KEY (src_chat, src_topic, dest_chat));
@@ -91,6 +92,14 @@ class Store:
             "SELECT dest_chat, dest_topic FROM topic_map WHERE src_chat=? AND src_topic=?",
             (src_chat, src_topic))
         return dict(rows.fetchall())
+
+    # chat access hashes: a restarted login can reach its chats without re-reading all dialogs
+    def save_peer(self, peer_id: int, access_hash: int) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO peers VALUES (?,?)", (peer_id, access_hash))
+
+    def peers(self) -> list:
+        return list(self.db.execute("SELECT id, hash FROM peers"))
 
     # jobs that must continue after a restart
     def add_pending(self, key: str, kind: str, data: str) -> None:
