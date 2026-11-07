@@ -158,7 +158,7 @@ def test_block_list_by_id_folder_invite_and_enforcement(hubenv):
     async def call(req):
         name = type(req).__name__
         if name == "CheckChatlistInviteRequest":
-            return _t.SimpleNamespace(chats=[types.Channel(id=111, title="Movies", photo=types.ChatPhotoEmpty(),
+            return _t.SimpleNamespace(title=types.TextWithEntities("Movies Pack", []), chats=[types.Channel(id=111, title="Movies", photo=types.ChatPhotoEmpty(),
                                                            date=None, access_hash=1),
                                              types.Channel(id=222, title="Songs", photo=types.ChatPhotoEmpty(),
                                                            date=None, access_hash=2)])
@@ -169,6 +169,27 @@ def test_block_list_by_id_folder_invite_and_enforcement(hubenv):
                                                          date=None, access_hash=3))
     owner_client.__call__ = None
     type(owner_client).__call__ = lambda self, req: call(req)
+    press(hub, "abk", OWNER)
+    say(hub, "https://t.me/addlist/AbCdEf", OWNER)
+    assert hub.acc.blocked_ids() == {-1000000000111, -1000000000222}
+    # folder shown as one button with its name; inside: its chats + red remove-all
+    ev = press(hub, "abl", OWNER)
+    rows = ev.edits[-1][1]
+    labels = [b.text for r in rows for b in r]
+    assert "📁 Movies Pack · 2 chats" in labels and "❌ Movies" not in labels, labels
+    add = next(b for r in rows for b in r if "Block chat" in b.text)
+    assert add.style.bg_success, "Block chat button is green"
+    ev = press(hub, "abf:AbCdEf", OWNER)
+    rows = ev.edits[-1][1]
+    labels = [b.text for r in rows for b in r]
+    assert "Movies Pack" in ev.edits[-1][0] and "❌ Movies" in labels and "❌ Songs" in labels
+    rm = next(b for r in rows for b in r if "Remove whole folder" in b.text)
+    assert rm.style.bg_danger and rm.type.data == b"abF:AbCdEf"
+    ev = press(hub, "aub:-1000000000111:AbCdEf", OWNER)
+    assert "Movies Pack" in ev.edits[-1][0], "stays in the folder after unblocking one chat"
+    assert hub.acc.blocked_ids() == {-1000000000222}
+    press(hub, "abF:AbCdEf", OWNER)
+    assert hub.acc.blocked_ids() == set(), "whole folder removed at once"
     press(hub, "abk", OWNER)
     say(hub, "https://t.me/addlist/AbCdEf", OWNER)
     assert hub.acc.blocked_ids() == {-1000000000111, -1000000000222}

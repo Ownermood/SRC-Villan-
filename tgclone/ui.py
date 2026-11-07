@@ -866,12 +866,47 @@ def admin_prompt(kind: str) -> Screen:
 @admin_screen
 def admin_blocked(hub) -> Screen:
     items = hub.acc.blocked()
-    rows = [[B(f"❌ {str(b['title'] or b['chat_id'])[:26]}", f"aub:{b['chat_id']}")] for b in items[:20]]
-    rows.append([_a("➕ Block chat", "abk")])
+    folders: dict = {}
+    for b in items:
+        if b["folder"]:
+            folders.setdefault(b["folder"], [b["fname"] or "Folder", 0])[1] += 1
+    single = [b for b in items if not b["folder"]]
+    rows = [[B(f"📁 {name[:24]} · {n} chats", f"abf:{slug}")] for slug, (name, n) in folders.items()]
+    rows += [[B(f"❌ {str(b['title'] or b['chat_id'])[:26]}", f"aub:{b['chat_id']}")] for b in single[:20]]
+    rows.append([B("➕ Block chat", "abk", "success")])
     rows.append([B("« Admin", "ad")])
-    more = f"\n<i>…and {len(items) - 20} more</i>" if len(items) > 20 else ""
-    return (f"<b>🚫 Blocked chats</b> · {len(items)}\n\nUsers can't clone, forward or save from these.\n"
-            f"<i>Tap one to unblock.</i>{more}", rows)
+    more = f"\n<i>…and {len(single) - 20} more</i>" if len(single) > 20 else ""
+    return (f"<b>🚫 Blocked chats</b> · {len(items)}\n\n<blockquote>Users can't clone, forward or save "
+            f"from these.\n👑 You (owner) are never blocked, so test with another account.</blockquote>\n"
+            f"<i>📁 Open a folder to see its chats · tap ❌ to unblock.</i>{more}", rows)
+
+
+FOLDER_PAGE = 20
+
+
+@admin_screen
+def admin_folder(hub, slug: str, page: int = 0) -> Screen:
+    chats = [b for b in hub.acc.blocked() if b["folder"] == slug]
+    if not chats:
+        return admin_blocked.__wrapped__(hub)
+    name = chats[0]["fname"] or "Folder"
+    pages = (len(chats) - 1) // FOLDER_PAGE + 1
+    page = max(0, min(page, pages - 1))
+    part = chats[page * FOLDER_PAGE:(page + 1) * FOLDER_PAGE]
+    rows = [[B(f"❌ {str(b['title'] or b['chat_id'])[:26]}", f"aub:{b['chat_id']}:{slug}")] for b in part]
+    if pages > 1:
+        nav = []
+        if page:
+            nav.append(B("◀️ Prev", f"abf:{slug}:{page - 1}"))
+        nav.append(B(f"{page + 1}/{pages}", "noop"))
+        if page < pages - 1:
+            nav.append(B("Next ▶️", f"abf:{slug}:{page + 1}"))
+        rows.append(nav)
+    rows.append([B(f"🗑 Remove whole folder ({len(chats)})", f"abF:{slug}", "danger")])
+    rows.append([B("« Blocked chats", "abl")])
+    return (f"<b>📁 {esc(name)}</b> · {len(chats)} blocked chat(s)\n\n<blockquote>Every chat from this "
+            f"folder link is blocked.</blockquote>\n<i>Tap ❌ to unblock one chat, or remove the whole "
+            f"folder at once.</i>", rows)
 
 
 @admin_screen

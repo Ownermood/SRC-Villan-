@@ -42,7 +42,7 @@ OWNER_CMDS = {"admin", "addpremium", "rmpremium", "block", "unblock"}
 HUB_CALLBACKS = {"lg", "hw", "otp", "ac", "lo", "LO", "LD", "bm", "bx", "gp", "bp", "prd", "apP", "apI", "ast",
                  "adp3",
                  "ad", "adm", "adu", "adv", "adb", "adl", "adp", "adj", "adx", "adt", "ap", "dn",
-                 "apm", "apg", "apr", "apl", "atr", "apt", "apa", "apx", "abl", "abk", "aub",
+                 "apm", "apg", "apr", "apl", "atr", "apt", "apa", "apx", "abl", "abk", "aub", "abf", "abF",
                  "aac", "alm", "asp", "aps", "apd", "aem", "aet"}
 # reachable while a plan is expired (profile, logout, help, get premium)
 EXPIRED_OK = {"ac", "lo", "LO", "LD", "gp", "bp", "hw", "bx", "otp", "lg", "noop"}
@@ -440,13 +440,14 @@ class Hub:
                 return app.user
         return self.bot
 
-    async def block_targets(self, msg) -> List[Tuple[int, str]]:
-        """Chats to block from a folder link, invite, link, @username, id or forwarded message."""
+    async def block_targets(self, msg) -> List[Tuple[int, str, str, str]]:
+        """(chat id, title, folder slug, folder name) to block from a folder link, invite, link,
+        @username, id or forwarded message. Folder fields are empty for single chats."""
         client = self.resolver()
         fwd = getattr(msg, "fwd_from", None)
         if fwd and isinstance(fwd.from_id, (types.PeerChannel, types.PeerChat)):
             cid = utils.get_peer_id(fwd.from_id)
-            return [(cid, await self._title(client, cid))]
+            return [(cid, await self._title(client, cid), "", "")]
         text = (msg.raw_text or "").strip()
         m = FOLDER_RE.search(text)
         if m:
@@ -454,8 +455,10 @@ class Hub:
             chats = list(getattr(res, "chats", []))
             if not chats:
                 raise ValueError("That folder link has no chats I can see.")
-            return [(utils.get_peer_id(c), getattr(c, "title", "") or str(c.id)) for c in chats
-                    if isinstance(c, (types.Channel, types.Chat))]
+            slug = m.group(1)[:40]
+            fname = await self._folder_name(client, res) or f"Folder {slug[:12]}"
+            return [(utils.get_peer_id(c), getattr(c, "title", "") or str(c.id), slug, fname)
+                    for c in chats if isinstance(c, (types.Channel, types.Chat))]
         m = INVITE_RE.search(text)
         if m:
             res = await client(functions.messages.CheckChatInviteRequest(hash=m.group(1)))
@@ -463,10 +466,27 @@ class Hub:
             if chat is None:
                 raise ValueError("I can't see the id behind this invite. Join it with your account "
                                  "(or forward a message from it) and try again.")
-            return [(utils.get_peer_id(chat), getattr(chat, "title", ""))]
+            return [(utils.get_peer_id(chat), getattr(chat, "title", ""), "", "")]
         ref = ui.chat_from_text(text)
         cid = await client.get_peer_id(ref)
-        return [(cid, await self._title(client, cid))]
+        return [(cid, await self._title(client, cid), "", "")]
+
+    @staticmethod
+    async def _folder_name(client, res) -> str:
+        """Folder title: from the invite, or (folder already added) from the account's folders."""
+        def plain(t):
+            return (getattr(t, "text", t) or "").strip() if t is not None else ""
+        name = plain(getattr(res, "title", None))
+        fid = getattr(res, "filter_id", None)
+        if not name and fid is not None:
+            try:
+                got = await client(functions.messages.GetDialogFiltersRequest())
+                for f in getattr(got, "filters", got) or []:
+                    if getattr(f, "id", None) == fid:
+                        name = plain(getattr(f, "title", None))
+            except Exception:
+                pass
+        return name[:40]
 
     @staticmethod
     async def _title(client, cid: int) -> str:
@@ -721,13 +741,16 @@ class Hub:
 
     async def _block_from(self, event, msg) -> None:
         targets = await self.block_targets(msg)
-        for cid, title in targets:
-            self.acc.block(cid, title)
+        for cid, title, folder, fname in targets:
+            self.acc.block(cid, title, folder, fname)
         await self._reload_all_forwards()
-        names = "\n".join(f"• {ui.esc(t)} <code>{c}</code>" for c, t in targets[:15])
+        names = "\n".join(f"• {ui.esc(t)} <code>{c}</code>" for c, t, _, _ in targets[:15])
         more = f"\n…and {len(targets) - 15} more" if len(targets) > 15 else ""
-        await self._show(event, ui.admin_screen((f"🚫 <b>Blocked {len(targets)} chat(s)</b>\n{names}{more}",
-                                 [[ui.B("🚫 Blocked chats", "abl"), ui.B("« Admin", "ad")]])))
+        head = (f"📁 <b>{ui.esc(targets[0][3])}</b>\n" if targets and targets[0][2] else "")
+        rows = [[ui.B("📁 Open folder", f"abf:{targets[0][2]}")]] if targets and targets[0][2] else []
+        rows.append([ui.B("🚫 Blocked chats", "abl"), ui.B("« Admin", "ad")])
+        await self._show(event, ui.admin_screen(
+            (f"🚫 <b>Blocked {len(targets)} chat(s)</b>\n{head}{names}{more}", rows)))
 
     async def _reload_all_forwards(self) -> None:
         for app, _ in list(self.ws.values()):
@@ -939,6 +962,15 @@ class Hub:
             self.acc.unblock(int(parts[1]))
             await self._reload_all_forwards()
             await event.answer("✅ Unblocked")
+            if len(parts) > 2 and any(b["folder"] == parts[2] for b in self.acc.blocked()):
+                return await show(ui.admin_folder(self, parts[2]))  # stay in the folder
+            return await show(ui.admin_blocked(self))
+        if k == "abf":
+            return await show(ui.admin_folder(self, parts[1], int(parts[2]) if len(parts) > 2 else 0))
+        if k == "abF":
+            n = self.acc.unblock_folder(parts[1])
+            await self._reload_all_forwards()
+            await event.answer(f"✅ Folder removed · {n} chat(s) unblocked")
             return await show(ui.admin_blocked(self))
         # start photo
         if k == "asp":

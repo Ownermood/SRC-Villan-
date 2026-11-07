@@ -64,6 +64,12 @@ class Accounts:
             CREATE TABLE IF NOT EXISTS botmode(uid INTEGER PRIMARY KEY, name TEXT, created REAL);
             """
         )
+        for col in ("folder", "fname"):  # older databases: chats blocked from a folder link
+            try:
+                with self.db:
+                    self.db.execute(f"ALTER TABLE blocked ADD COLUMN {col} TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # already there
         try:
             os.chmod(path, 0o600)
         except OSError:
@@ -149,17 +155,22 @@ class Accounts:
         return [dict(zip(("uid", "expires", "kind", "notified"), r)) for r in rows]
 
     # ---------------------------------------------------------- blocked chats
-    def block(self, chat_id: int, title: str) -> None:
+    def block(self, chat_id: int, title: str, folder: str = "", fname: str = "") -> None:
         with self.db:
-            self.db.execute("INSERT OR REPLACE INTO blocked VALUES (?,?,?)", (chat_id, title, time.time()))
+            self.db.execute("INSERT OR REPLACE INTO blocked(chat_id, title, added, folder, fname) "
+                            "VALUES (?,?,?,?,?)", (chat_id, title, time.time(), folder, fname))
+
+    def unblock_folder(self, folder: str) -> int:
+        with self.db:
+            return self.db.execute("DELETE FROM blocked WHERE folder=?", (folder,)).rowcount
 
     def unblock(self, chat_id: int) -> None:
         with self.db:
             self.db.execute("DELETE FROM blocked WHERE chat_id=?", (chat_id,))
 
     def blocked(self) -> List[dict]:
-        rows = self.db.execute("SELECT chat_id, title FROM blocked ORDER BY added DESC")
-        return [{"chat_id": c, "title": t} for c, t in rows]
+        rows = self.db.execute("SELECT chat_id, title, folder, fname FROM blocked ORDER BY added DESC")
+        return [{"chat_id": c, "title": t, "folder": f or "", "fname": n or ""} for c, t, f, n in rows]
 
     def blocked_ids(self) -> set:
         return {r[0] for r in self.db.execute("SELECT chat_id FROM blocked")}
