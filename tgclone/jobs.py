@@ -76,6 +76,8 @@ class Job:
         self._file_t = 0.0
         self._xfer = None
         self._samples = []
+        self.speed = 0.0  # bytes/s of the current transfer (0 = none)
+        self.direction = ""
 
     # called by send() during download/upload
     def file_progress(self, direction: str, cur: int, total: int) -> None:
@@ -91,6 +93,7 @@ class Job:
         self._file_t = now
         t0, c0 = self._samples[0]
         speed = (cur - c0) / (now - t0) if now - t0 > 0.2 else 0
+        self.speed, self.direction = speed, direction
         icon = "⬇️" if direction == "down" else "⬆️"
         eta = f" · {human_time((total - cur) / speed)} left" if speed > 1024 and total else ""
         self.file = (f"{icon} {bar(cur / total if total else 0, 10)} "
@@ -98,6 +101,8 @@ class Job:
                      f"{human_size(speed) + '/s' if speed else 'measuring…'}{eta}")
         if cur >= total:
             self.file = ""
+            self.speed = 0.0
+            STATS[direction] = STATS.get(direction, 0) + total
 
     @property
     def elapsed(self) -> float:
@@ -128,6 +133,10 @@ class Job:
         if self.error:
             lines.append(f"❗ {html.escape(self.error[:200])}")
         return "\n".join(lines)
+
+
+# totals since the bot started (all users) - shown in 📊 Bot stats
+STATS = {"done": 0, "failed": 0, "stopped": 0, "posts": 0, "down": 0, "up": 0}
 
 
 class JobManager:
@@ -168,6 +177,10 @@ class JobManager:
                 return
             job._finished = True
             job.file = ""
+            job.speed = 0.0
+            if job.state in STATS:
+                STATS[job.state] += 1
+            STATS["posts"] += job.done
             if on_finish:
                 try:
                     await on_finish(job)

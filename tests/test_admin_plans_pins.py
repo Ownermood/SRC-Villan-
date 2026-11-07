@@ -336,3 +336,46 @@ def test_all_screens_serialize():
             if buttons:
                 assert bytes(tc.build_reply_markup(buttons))
     assert hub
+
+
+def test_bot_stats_live_and_premium_list_only_premium(hubenv):
+    hub = hubenv.new_hub()
+    login(hub, OWNER, "+91000000001", env=hubenv)
+    login(hub, 5, "+91000000005", env=hubenv)  # trial user
+    login(hub, 6, "+91000000006", env=hubenv)
+    press(hub, "apg", OWNER)
+    say(hub, "6 30", OWNER)
+    ev = press(hub, "apl:0", OWNER)
+    labels = [b.text for r in ev.edits[-1][1] for b in r]
+    assert not any(t.startswith("🎁") for t in labels), "trial users are not in the premium list"
+    assert sum(t.startswith("⭐") for t in labels) == 1
+    # stats screen: sections + live refresh task, stopped when another screen opens
+    ev = press(hub, "ad", OWNER)
+    assert "abs" in datas(ev.edits[-1][1])
+    ev = press(hub, "abs", OWNER)
+    text = ev.edits[-1][0]
+    for part in ("Users", "Plans", "Working now", "Since start", "Server", "Premium · <b>1</b>"):
+        assert part in text, part
+    task = hub._stats_task
+    assert task is not None, "live refresh started"
+    press(hub, "ad", OWNER)
+    assert hub._stats_task is None, "leaving the screen stops the refresh"
+
+
+def test_live_stats_loop_edits_then_pauses(hubenv, monkeypatch):
+    import asyncio
+    hub = hubenv.new_hub()
+    login(hub, OWNER, "+91000000001", env=hubenv)
+    monkeypatch.setattr(type(hub), "STATS_EVERY", 0.01)
+    monkeypatch.setattr(type(hub), "STATS_FOR", 0.03)
+    edits = []
+
+    class Msg_:
+        async def edit(self, text, **kw):
+            edits.append(text)
+
+    async def go():
+        hub._live_stats(Msg_())
+        await hub._stats_task
+    asyncio.run(go())
+    assert len(edits) == 3 and "🟢 live" in edits[0] and "live view paused" in edits[-1]

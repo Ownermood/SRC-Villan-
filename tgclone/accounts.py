@@ -195,6 +195,10 @@ class Accounts:
                 return row[0]
         return ""
 
+    def new_since(self, ts: float) -> int:
+        return sum(self.db.execute(f"SELECT COUNT(*) FROM {t} WHERE created>?", (ts,)).fetchone()[0]
+                   for t in ("sessions", "botmode"))
+
     def counts(self) -> Dict[str, int]:
         c = {"users": self.db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]}
         c["botmode"] = self.db.execute("SELECT COUNT(*) FROM botmode").fetchone()[0]

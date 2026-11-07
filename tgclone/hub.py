@@ -42,7 +42,7 @@ OWNER_CMDS = {"admin", "addpremium", "rmpremium", "block", "unblock"}
 HUB_CALLBACKS = {"lg", "hw", "otp", "ac", "lo", "LO", "LD", "bm", "bx", "gp", "bp", "prd", "apP", "apI", "ast",
                  "adp3",
                  "ad", "adm", "adu", "adv", "adb", "adl", "adp", "adj", "adx", "adt", "ap", "dn",
-                 "apm", "apg", "apr", "apl", "atr", "apt", "apa", "apx", "abl", "abk", "aub", "abf", "abF",
+                 "apm", "apg", "apr", "apl", "atr", "apt", "apa", "apx", "abl", "abk", "aub", "abf", "abF", "abs",
                  "aac", "alm", "asp", "aps", "apd", "aem", "aet"}
 # reachable while a plan is expired (profile, logout, help, get premium)
 EXPIRED_OK = {"ac", "lo", "LO", "LD", "gp", "bp", "hw", "bx", "otp", "lg", "noop"}
@@ -658,6 +658,8 @@ class Hub:
             raise events.StopPropagation
         uid = event.sender_id
         key = event.data.decode().split(":", 1)[0]
+        if uid == self.owner and key != "abs":
+            self._stop_stats()  # left the stats screen: stop its live refresh
         ws = self.ws.get(uid)
         if ws and key not in EXPIRED_OK and not self.plan_ok(uid):
             await self._run(event, self._show(event, ui.plan_expired(self, uid), edit=True))
@@ -893,6 +895,33 @@ class Hub:
             return await event.answer("🚫 Owner only", alert=True)
         return await self.admin_callback(event, k, parts)
 
+    STATS_EVERY, STATS_FOR = 5, 120  # live stats: refresh every 5 s for 2 min
+
+    def _stop_stats(self) -> None:
+        task = getattr(self, "_stats_task", None)
+        if task is not None and not task.done():
+            task.cancel()
+        self._stats_task = None
+
+    def _live_stats(self, msg) -> None:
+        """Keep the 📊 Bot stats message updating by itself (one at a time)."""
+        self._stop_stats()
+
+        async def loop():
+            n = max(1, round(self.STATS_FOR / self.STATS_EVERY))
+            for i in range(n):
+                await asyncio.sleep(self.STATS_EVERY)
+                text, rows = ui.admin_stats(self, live=i < n - 1)
+                try:
+                    await msg.edit(text, buttons=rows, parse_mode="html", link_preview=False)
+                except FloodWaitError as e:
+                    await asyncio.sleep(e.seconds)
+                except Exception as e:
+                    if "not modified" not in str(e).lower():
+                        log.info("live stats stopped: %s", e)
+                        return
+        self._stats_task = asyncio.ensure_future(loop())
+
     async def admin_callback(self, event, k: str, parts: list) -> None:
         st = self.settings
         self.admin_wait = None
@@ -907,6 +936,9 @@ class Hub:
 
         if k == "ad":
             return await show(ui.admin_view(self))
+        if k == "abs":
+            await show(ui.admin_stats(self))
+            return self._live_stats(await event.get_message())
         if k == "aac":
             return await show(ui.admin_access(self))
         if k == "adm":

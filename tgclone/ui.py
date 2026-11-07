@@ -745,6 +745,7 @@ def admin_view(hub) -> Screen:
             f"⏰ <b>Uptime</b> · {left(up)}</blockquote>\n" + _emoji_note(st))
     rows = [
         [_a("👥 Users", "adu:0"), _a(f"📬 Requests ({c['pending']})", "adp")],
+        [B("📊 Bot stats · live", "abs", "success")],
         [_a("💎 Premium", "apm"), _a("🚫 Blocked chats", "abl")],
         [_a("🔐 Access", "aac"), _a("⚙️ Limits", "alm")],
         [_a("🖼 Start photo", "asp"), _a(f"⭐ Premium emoji: {'on' if st.premium_emoji else 'off'}", "aem")],
@@ -752,6 +753,105 @@ def admin_view(hub) -> Screen:
         [B("🔄 Refresh", "ad"), B("« Back", "m")],
     ]
     return text, rows
+
+
+def _server() -> dict:
+    """CPU load, RAM, bot RAM, free disk (Linux /proc; missing values stay 0)."""
+    import os
+    import shutil
+    from tgclone.config import DATA_DIR
+    s = {"cores": os.cpu_count() or 1, "load": 0.0, "mem_total": 0, "mem_free": 0, "rss": 0,
+         "disk_free": 0, "disk_total": 0}
+    try:
+        s["load"] = os.getloadavg()[0]
+    except (OSError, AttributeError):
+        pass
+    try:
+        with open("/proc/meminfo") as f:
+            info = {line.split(":")[0]: int(line.split()[1]) * 1024 for line in f}
+        s["mem_total"], s["mem_free"] = info.get("MemTotal", 0), info.get("MemAvailable", 0)
+        with open("/proc/self/status") as f:
+            s["rss"] = next((int(line.split()[1]) * 1024 for line in f if line.startswith("VmRSS")), 0)
+    except OSError:
+        pass
+    try:
+        du = shutil.disk_usage(DATA_DIR if DATA_DIR.exists() else ".")
+        s["disk_free"], s["disk_total"] = du.free, du.total
+    except OSError:
+        pass
+    return s
+
+
+@admin_screen
+def admin_stats(hub, live: bool = True) -> Screen:
+    """📊 Bot stats: users, plans, work right now, totals since start, server. Refreshed live."""
+    from tgclone import fast
+    from tgclone.config import DOWNLOAD_DIR
+    from tgclone.jobs import STATS, human_size
+    now = _time.time()
+    c = hub.acc.counts()
+    plans = hub.acc.plans()
+    prem = sum(1 for p in plans if p["kind"] == "premium" and p["expires"] > now)
+    trial = sum(1 for p in plans if p["kind"] == "trial" and p["expires"] > now)
+    expired = sum(1 for p in plans if p["expires"] <= now)
+    apps = [app for app, _ in hub.ws.values()]
+    jobs = [j for app in apps for j in app.jobs.running()]
+    clones = sum(1 for j in jobs if j.kind == "clone")
+    busy = sum(1 for app in apps if app.jobs.running())
+    sources = sum(len(app.from_to) for app in apps if not app.paused)
+    live_users = sum(1 for app in apps if app.from_to and not app.paused)
+    down = sum(j.speed for j in jobs if j.direction == "down")
+    up = sum(j.speed for j in jobs if j.direction == "up")
+    try:
+        files = [f for f in DOWNLOAD_DIR.iterdir() if f.is_file()]
+    except FileNotFoundError:
+        files = []
+    tmp = sum(f.stat().st_size for f in files if f.exists())
+    sv = _server()
+    cpu = min(100, int(sv["load"] / sv["cores"] * 100))
+    ram_used = sv["mem_total"] - sv["mem_free"]
+    pool = "⏸ paused (Telegram cut them)" if fast._paused(_PoolProbe()) else "✅ allowed"
+    total = c["users"] + c["botmode"]
+
+    def pct(a, b):
+        return f"{int(a / b * 100)}%" if b else "—"
+    text = (
+        "<b>📊 Bot stats</b>" + (" · <i>🟢 live</i>" if live else "") + "\n\n"
+        "<b>👥 Users</b>\n<blockquote>"
+        f"👥 Total · <b>{total}</b> · 🆕 {hub.acc.new_since(now - 86400)} in 24h\n"
+        f"🔐 Logged in · <b>{c['users']}</b> · 🤖 Without login · <b>{c['botmode']}</b>\n"
+        f"🟢 Online now · <b>{len(hub.ws)}</b> · 📬 Waiting · {c['pending']} · ⛔ Banned · {c['banned']}"
+        "</blockquote>\n"
+        "<b>💎 Plans</b>\n<blockquote>"
+        f"⭐ Premium · <b>{prem}</b> · 🎁 Trial · <b>{trial}</b> · ⌛ Expired · {expired}"
+        "</blockquote>\n"
+        "<b>⚡ Working now</b>\n<blockquote>"
+        f"⏳ Jobs · <b>{len(jobs)}</b> / {hub.settings.max_total_jobs} · 🔁 {clones} clone · "
+        f"📥 {len(jobs) - clones} save · 👥 {busy} user(s)\n"
+        f"📡 Live forwards · <b>{sources}</b> source(s) · {live_users} user(s)\n"
+        f"⬇️ {human_size(down)}/s · ⬆️ {human_size(up)}/s\n"
+        f"📂 Temp files · {len(files)} · {human_size(tmp)}"
+        "</blockquote>\n"
+        "<b>📈 Since start</b>\n<blockquote>"
+        f"⏰ Uptime · <b>{left(now - hub.started)}</b>\n"
+        f"✅ {STATS['done']} done · ❌ {STATS['failed']} failed · ⏹ {STATS['stopped']} stopped\n"
+        f"📨 Posts sent · <b>{STATS['posts']:,}</b>\n"
+        f"⬇️ {human_size(STATS['down'])} downloaded · ⬆️ {human_size(STATS['up'])} uploaded"
+        "</blockquote>\n"
+        "<b>🖥 Server</b>\n<blockquote>"
+        f"⚙️ CPU · <b>{cpu}%</b> · {sv['cores']} cores\n"
+        f"🧠 RAM · {human_size(ram_used)} / {human_size(sv['mem_total'])} ({pct(ram_used, sv['mem_total'])}) · "
+        f"bot {human_size(sv['rss'])}\n"
+        f"💾 Disk free · {human_size(sv['disk_free'])} / {human_size(sv['disk_total'])}\n"
+        f"🔌 Extra connections · {pool}"
+        "</blockquote>\n"
+        f"<i>🔄 Updated {_time.strftime('%H:%M:%S')}"
+        + (" · refreshes every 5 s for 2 min</i>" if live else " · live view paused, tap 🔄 Refresh</i>"))
+    return text, [[B("🔄 Refresh", "abs")], [B("« Admin", "ad")]]
+
+
+class _PoolProbe:
+    """fast._paused() wants a client; the remembered pause is global."""
 
 
 def _emoji_note(st) -> str:
@@ -822,20 +922,20 @@ def admin_premium(hub) -> Screen:
 @admin_screen
 def admin_premium_list(hub, page: int = 0) -> Screen:
     now = _time.time()
-    plans = [p for p in hub.acc.plans() if p["expires"] > now]
+    plans = [p for p in hub.acc.plans() if p["expires"] > now and p["kind"] == "premium"]
     pages = max(1, (len(plans) + PAGE - 1) // PAGE)
     page = max(0, min(page, pages - 1))
     rows = []
     for p in plans[page * PAGE:(page + 1) * PAGE]:
-        icon = "⭐" if p["kind"] == "premium" else "🎁"
         name = hub.acc.name_of(p["uid"]) or p["uid"]
-        rows.append([B(f"{icon} {str(name)[:20]} · {left(p['expires'] - now)}", f"adv:{p['uid']}")])
+        rows.append([B(f"⭐ {str(name)[:20]} · {left(p['expires'] - now)}", f"adv:{p['uid']}")])
     nav = ([B("‹ Prev", f"apl:{page - 1}")] if page else []) + \
           ([B("Next ›", f"apl:{page + 1}")] if page < pages - 1 else [])
     if nav:
         rows.append(nav)
     rows.append([B("« Premium", "apm")])
-    return f"<b>📋 Active plans</b> · {len(plans)}\n<i>⭐ premium · 🎁 trial</i>", rows
+    return (f"<b>⭐ Premium users</b> · {len(plans)}\n<i>Only paid premium (free trials are not listed). "
+            f"Tap one to manage.</i>" if plans else "<b>⭐ Premium users</b> · 0\n<i>Nobody has premium yet.</i>"), rows
 
 
 @admin_screen
