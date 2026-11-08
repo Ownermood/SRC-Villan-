@@ -304,14 +304,15 @@ class Panel:
         if name == "clone":
             parts = args.split()
             if not parts:
-                raise ValueError(f"Usage: {p}clone #1 [fresh]  or  {p}clone <source> <dest>")
+                raise ValueError(f"Usage: {p}clone #1 [fresh] [media]  or  {p}clone <source> <dest> [media]")
             fresh = "fresh" in parts
-            parts = [x for x in parts if x != "fresh"]
+            media = "media" in parts
+            parts = [x for x in parts if x not in ("fresh", "media")]
             if len(parts) >= 2:
                 fwd = Forward(source=norm_ref(parts[0]), dest=[norm_ref(d) for d in parts[1:]])
             else:
                 fwd = app.cfg.forwards[self.pick(parts[0])]
-            return await self.start_clone(event, fwd, fresh)
+            return await self.start_clone(event, fwd.model_copy(update={"only_media": media}), fresh)
         if name == "batch":
             parts = args.split()
             link = parse_link(parts[0]) if parts else None
@@ -399,10 +400,15 @@ class Panel:
                 await self.reload_forwards()
                 await event.answer("🟢 Live sync on" if f.enabled else "⏸ Paused")
                 return await self.show(event, await ui.forward_view(app, i), edit=True)
-            if k == "fc":
+            if k == "fc":  # ask first: everything or only media
                 i = self.checked(*parts[1:])
-                await event.answer("🔁 Clone started")
-                return await self.start_clone(event, app.cfg.forwards[i], fresh=False)
+                return await self.show(event, ui.clone_choice(parts[1], parts[2], fresh=False), edit=True)
+            if k == "fC":  # fC:i:hash:fresh:mode
+                i = self.checked(parts[1], parts[2])
+                fresh = parts[3] == "1"
+                fwd = app.cfg.forwards[i].model_copy(update={"only_media": parts[4] == "media"})
+                await event.answer("♻️ Fresh clone started" if fresh else "🔁 Clone started")
+                return await self.start_clone(event, fwd, fresh=fresh)
             if k == "fx":
                 i = self.checked(*parts[1:])
                 return await self.show(event, ui.confirm(
@@ -410,8 +416,7 @@ class Panel:
                     f"fX:{parts[1]}:{parts[2]}", f"fv:{parts[1]}:{parts[2]}"), edit=True)
             if k == "fX":
                 i = self.checked(*parts[1:])
-                await event.answer("♻️ Fresh clone started")
-                return await self.start_clone(event, app.cfg.forwards[i], fresh=True)
+                return await self.show(event, ui.clone_choice(parts[1], parts[2], fresh=True), edit=True)
             if k == "fd":
                 i = self.checked(*parts[1:])
                 return await self.show(event, ui.confirm(

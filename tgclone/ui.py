@@ -320,6 +320,18 @@ def settings_view(app: App) -> Screen:
     return text, buttons
 
 
+def clone_choice(i: str, h: str, fresh: bool) -> Screen:
+    """Before a clone from a saved forward: everything, or only media."""
+    f = "1" if fresh else "0"
+    return ((f"<b>{'♻️ Fresh clone' if fresh else '🔁 Clone history'}</b>\n\nWhat should I copy?\n<blockquote>"
+             "💬 <b>Everything</b> · media and text messages\n"
+             "🖼 <b>Only media</b> · photos, videos, PDF / files, audio, voice, GIFs, polls — "
+             "plain text chat messages are skipped</blockquote>"),
+            [[B("💬 Everything", f"fC:{i}:{h}:{f}:all", "primary"),
+              B("🖼 Only media", f"fC:{i}:{h}:{f}:media", "success")],
+             [B("« Back", f"fv:{i}:{h}")]])
+
+
 THUMB_MODES = {"original": "📌 Original", "custom": "🖼 My image", "none": "🚫 No thumbnail"}
 THUMB_TYPES_UI = [("video", "🎬 Video"), ("document", "📄 PDF / File"),
                   ("audio", "🎵 Audio"), ("gif", "🎞 GIF")]

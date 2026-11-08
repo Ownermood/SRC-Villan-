@@ -232,7 +232,7 @@ def test_without_login_mode(hubenv):
     bot.protected.clear()
     say(hub, "/add -100111 -100222", 5)
     assert len(app.cfg.forwards) == 1
-    ev = press(hub, f"fc:0:{ui.fhash(app.cfg.forwards[0])}", 5)
+    ev = press(hub, f"fC:0:{ui.fhash(app.cfg.forwards[0])}:0:all", 5)
     assert any("needs a login" in a[0] for a in ev.answers if a[0])
     ev = say(hub, "https://t.me/c/123/5", 5)
     assert "needs a login" in ev.out[-1][0]

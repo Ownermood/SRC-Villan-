@@ -139,7 +139,7 @@ def test_jobs_survive_restart_and_resume(hubenv):
 
     async def go():
         ev = await __import__("test_hub")._dispatch(hub, __import__("fakes").CallbackEvent(
-            f"fc:0:{ui.fhash(app.cfg.forwards[0])}", OWNER))
+            f"fC:0:{ui.fhash(app.cfg.forwards[0])}:0:all", OWNER))
         await asyncio.sleep(0.05)
         assert app.store.pending(), "running clone is remembered"
         # simulate a shutdown: the task is cancelled without the user pressing stop
@@ -196,7 +196,7 @@ def test_user_stop_forgets_job(hubenv):
     async def go():
         import test_hub
         from fakes import CallbackEvent
-        await test_hub._dispatch(hub, CallbackEvent(f"fc:0:{ui.fhash(app.cfg.forwards[0])}", OWNER))
+        await test_hub._dispatch(hub, CallbackEvent(f"fC:0:{ui.fhash(app.cfg.forwards[0])}:0:all", OWNER))
         await asyncio.sleep(0.05)
         assert app.store.pending()
         await test_hub._dispatch(hub, CallbackEvent("jS", OWNER))

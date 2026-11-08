@@ -239,3 +239,20 @@ def test_stop_on_card_keeps_the_card_and_stops_editing():
         return job
     job = run(go())
     assert job.state == "stopped"
+
+
+def test_clone_from_forward_asks_everything_or_media(monkeypatch):
+    a, p = panel()
+    a.cfg.forwards = [Forward(source=-100111, dest=[-100222])]
+    started = []
+
+    async def fake(self, event, fwd, fresh):
+        started.append((fwd.only_media, fresh))
+    monkeypatch.setattr(bot.Panel, "start_clone", fake)
+    h = ui.fhash(a.cfg.forwards[0])
+    ev = run(press(p, f"fc:0:{h}"))
+    assert "Only media" in str([b.text for r in ev.edits[-1][1] for b in r]) and not started
+    run(press(p, f"fC:0:{h}:0:media"))
+    run(press(p, f"fC:0:{h}:1:all"))
+    assert started == [(True, False), (False, True)]
+    assert a.cfg.forwards[0].only_media is False, "the saved forward (live sync) is not changed"
