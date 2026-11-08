@@ -58,6 +58,7 @@ BOT_COMMANDS = {"start": "Open the control panel", "profile": "Plan, account, lo
 OWNER_COMMANDS = {**BOT_COMMANDS, "admin": "🛡 Admin panel", "addpremium": "user days",
                   "rmpremium": "user", "block": "chat / link / folder", "unblock": "chat"}
 PHONE_RE = re.compile(r"^\+?\d[\d\s-]{6,16}\d$")
+RESTORE_PARALLEL = 25  # saved logins connected at once at start (1000 users: ~1 min)
 START_TEXT_MAX = 3500  # visible characters of the owner's start text (message limit 4096)
 FOLDER_RE = re.compile(r"(?:t\.me|telegram\.me)/addlist/([\w-]+)")
 INVITE_RE = re.compile(r"(?:t\.me|telegram\.me)/(?:\+|joinchat/)([\w-]+)")
@@ -134,7 +135,7 @@ class Hub:
             except Exception:
                 pass
 
-        sem = asyncio.Semaphore(5)
+        sem = asyncio.Semaphore(RESTORE_PARALLEL)
 
         async def restore(uid, session):
             async with sem:
@@ -160,7 +161,8 @@ class Hub:
         log.info("Users loaded in %.1fs", time.time() - started)
         await self._set_commands()
         self._tasks.append(asyncio.create_task(self._housekeeping()))
-        log.info("Hub ready: %s user(s) online, mode=%s", len(self.ws), self.settings.mode)
+        log.info("Hub ready: %s user(s) online, mode=%s, encryption: %s", len(self.ws),
+                 self.settings.mode, crypto_backend())
 
     async def _set_commands(self) -> None:
         try:
@@ -1053,7 +1055,9 @@ class Hub:
             elif k == "adj":
                 st.user_max_jobs = max(1, min(10, st.user_max_jobs + (1 if up else -1)))
             elif k == "adt":
-                st.max_total_jobs = max(1, min(100, st.max_total_jobs + (1 if up else -1)))
+                n = st.max_total_jobs
+                stp = 1 if n < 20 or (n == 20 and not up) else 10 if n < 200 or (n == 200 and not up) else 50
+                st.max_total_jobs = max(1, min(1000, n + (stp if up else -stp)))
             else:
                 steps = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 0]  # 0 = no limit (last)
                 i = steps.index(st.user_max_batch) if st.user_max_batch in steps else len(steps) - 1
@@ -1468,6 +1472,16 @@ class Hub:
         else:
             await self._show(event, done, edit=edit)
         await self._show(event, await ui.main_menu(app))
+
+
+def crypto_backend() -> str:
+    """cryptg (C) makes every download / upload far cheaper than pure-Python AES."""
+    from telethon.crypto import aes
+    if getattr(aes, "cryptg", None):
+        return "cryptg (fast)"
+    if getattr(getattr(aes, "libssl", None), "encrypt_ige", None):
+        return "libssl (ok)"
+    return "pure Python (SLOW - run: .venv/bin/pip install cryptg)"
 
 
 class _Chat:

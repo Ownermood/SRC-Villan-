@@ -19,7 +19,7 @@ class HubSettings(BaseModel):
     user_max_jobs: int = Field(1, ge=1, le=10)  # jobs at once on the free trial
     premium_max_jobs: int = Field(3, ge=1, le=20)  # jobs at once with premium (channel + group + topics)
     user_max_batch: int = Field(0, ge=0)  # posts per save job per user (0 = no limit)
-    max_total_jobs: int = Field(10, ge=1, le=100)  # all users together
+    max_total_jobs: int = Field(10, ge=1, le=1000)  # all users together
     max_users: int = Field(0, ge=0)  # 0 = unlimited logged-in users
     premium_enabled: bool = True  # plans: new users get a free trial, then need premium days
     trial_hours: int = Field(24, ge=0, le=24 * 30)  # free trial for every new user (0 = none)

@@ -464,3 +464,19 @@ def test_stuck_post_is_retried_not_waited_forever(monkeypatch):
     tm = CloneMessage(Msg(5, "hello"))
     done = asyncio.run(a.deliver(-1, [tm], [-2]))
     assert done == 1 and calls["n"] == 2, "timed out, retried, sent"
+
+
+def test_scale_settings_for_many_users(hubenv):
+    hub = hubenv.new_hub()
+    login(hub, OWNER, "+91000000001", env=hubenv)
+    hub.settings.max_total_jobs = 20
+    press(hub, "adt:+", OWNER)
+    assert hub.settings.max_total_jobs == 30, "bigger steps above 20"
+    hub.settings.max_total_jobs = 950
+    press(hub, "adt:+", OWNER)
+    press(hub, "adt:+", OWNER)
+    assert hub.settings.max_total_jobs == 1000 and hub.acc.settings().max_total_jobs == 1000
+    panel = hub.ws[OWNER][1]
+    assert panel._card_every() == 4.0
+    from tgclone.hub import crypto_backend
+    assert crypto_backend()

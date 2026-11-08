@@ -906,11 +906,17 @@ def admin_stats(hub, live: bool = True) -> Screen:
         f"🧠 RAM · {human_size(ram_used)} / {human_size(sv['mem_total'])} ({pct(ram_used, sv['mem_total'])}) · "
         f"bot {human_size(sv['rss'])}\n"
         f"💾 Disk free · {human_size(sv['disk_free'])} / {human_size(sv['disk_total'])}\n"
-        f"🔌 Extra connections · {pool}"
+        f"🔌 Extra connections · {pool}\n"
+        f"🔐 Encryption · {_crypto()}"
         "</blockquote>\n"
         f"<i>🔄 Updated {_time.strftime('%H:%M:%S')}"
         + (" · refreshes every 5 s for 2 min</i>" if live else " · live view paused, tap 🔄 Refresh</i>"))
     return text, [[B("🔄 Refresh", "abs")], [B("« Admin", "ad")]]
+
+
+def _crypto() -> str:
+    from tgclone.hub import crypto_backend
+    return crypto_backend()
 
 
 class _PoolProbe:

@@ -203,8 +203,9 @@ class Panel:
         async def ticker():
             last = ""
             while not done.is_set():
-                try:
-                    await asyncio.wait_for(done.wait(), timeout=4)
+                try:  # every card every 4 s; with many jobs slower, so the bot stays under
+                    # Telegram's ~30 messages/s (all cards together: about 8 edits per second)
+                    await asyncio.wait_for(done.wait(), timeout=self._card_every())
                 except asyncio.TimeoutError:
                     pass
                 if done.is_set() or not card:
@@ -218,6 +219,11 @@ class Panel:
                         pass
         asyncio.create_task(ticker())
         return job
+
+    def _card_every(self) -> float:
+        hub = self.hub
+        total = sum(len(a.jobs.running()) for a, _ in hub.ws.values()) if hub else len(self.app.jobs.running())
+        return max(4.0, total / 8)
 
     async def start_clone(self, event, fwd: Forward, fresh: bool):
         app = self.app
