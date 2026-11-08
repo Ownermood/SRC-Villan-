@@ -58,6 +58,8 @@ BOT_COMMANDS = {"start": "Open the control panel", "profile": "Plan, account, lo
 OWNER_COMMANDS = {**BOT_COMMANDS, "admin": "🛡 Admin panel", "addpremium": "user days",
                   "rmpremium": "user", "block": "chat / link / folder", "unblock": "chat"}
 PHONE_RE = re.compile(r"^\+?\d[\d\s-]{6,16}\d$")
+RECONNECT_DELAY = 5  # s between reconnect attempts (Telethon: 1 s -> a storm of new connections,
+# which Telegram answers with transport flood 429)
 RESTORE_PARALLEL = 25  # saved logins connected at once at start (1000 users: ~1 min)
 START_TEXT_MAX = 3500  # visible characters of the owner's start text (message limit 4096)
 FOLDER_RE = re.compile(r"(?:t\.me|telegram\.me)/addlist/([\w-]+)")
@@ -96,7 +98,7 @@ class Hub:
     def _make_client(self, session: str) -> TelegramClient:
         return TelegramClient(StringSession(session), self.secrets.api_id, self.secrets.api_hash,
                               device_model="tgclone bot", app_version=__version__,
-                              flood_sleep_threshold=60)
+                              flood_sleep_threshold=60, retry_delay=RECONNECT_DELAY)
 
     async def start(self) -> None:
         if self.bot is None:
@@ -105,7 +107,8 @@ class Hub:
             DATA_DIR.mkdir(parents=True, exist_ok=True)
             fast.load_state(DATA_DIR / "fast_pool.json")  # remember a Telegram reset across restarts
             self.bot = TelegramClient(str(DATA_DIR / "bot"), self.secrets.api_id,
-                                      self.secrets.api_hash, flood_sleep_threshold=60)
+                                      self.secrets.api_hash, flood_sleep_threshold=60,
+                                      retry_delay=RECONNECT_DELAY)
             await self.bot.start(bot_token=self.secrets.bot_token)
         emoji.install(self.bot)  # every bot message / edit / caption gets premium emoji
         me = await self.bot.get_me()

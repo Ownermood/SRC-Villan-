@@ -488,11 +488,12 @@ def test_one_cap_for_all_transfers_and_backoff_on_429(tmp_path, monkeypatch):
             raise InvalidBufferError(b"\x53\xfe\xff\xff")
         return await real(sender, req)
     srv2._call = flood_once
+    monkeypatch.setattr(fast, "FLOOD_COOL", 0.01)
     real_sleep = asyncio.sleep
     monkeypatch.setattr(fast.asyncio, "sleep", lambda s: real_sleep(0))
     out = run(fast.download(srv2, doc_msg(big), str(tmp_path / "f.mp4")))
     assert open(out, "rb").read() == data and hit["n"] == 1
-    assert fast._limiter(srv2).limit == fast.MAX_INFLIGHT // 2 and fast._paused(srv2)
+    assert fast._limiter(srv2).limit == max(2, fast.MAX_INFLIGHT // 4) and fast._paused(srv2)
 
 
 def test_free_account_speed_limit_waits_instead_of_failing(tmp_path, monkeypatch):

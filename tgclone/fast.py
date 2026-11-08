@@ -27,8 +27,9 @@ PER_CONNECTION = 4  # requests in flight on each extra connection
 POOL_SIZE = 10 * 1024 * 1024  # use extra connections from this size
 IDLE_CLOSE = 60  # seconds an unused shared pool stays open
 PAUSE_AFTER_RESET = 600  # Telegram cut our extra connections: one connection for 10 min
-MAX_INFLIGHT = 12  # file-part requests at once per account on its main connection (all transfers)
-FLOOD_PAUSE = 600  # after Telegram's transport flood (-429): fewer parts at once for 10 min
+MAX_INFLIGHT = 8  # file-part requests at once per account on its main connection (all transfers)
+FLOOD_PAUSE = 900  # after Telegram's transport flood (-429): fewer parts at once for 15 min
+FLOOD_COOL = 20  # ...and no new part request at all for 20 s (let the connection recover)
 PART_TIMEOUT = 60  # one 512 KB part; no answer by then = lost reply, ask again
 MAX_PAUSE = 7 * 24 * 3600  # after repeated resets: extra connections stay off for a week
 MIN_SIZE = 1024 * 1024  # smaller files: one part, nothing to run in parallel
@@ -100,13 +101,16 @@ class _Limiter:
     def __init__(self) -> None:
         self.inflight = 0
         self.low_until = 0.0
+        self.cool_until = 0.0
         self.cond = asyncio.Condition()
 
     @property
     def limit(self) -> int:
-        return max(2, MAX_INFLIGHT // 2) if time.time() < self.low_until else MAX_INFLIGHT
+        return max(2, MAX_INFLIGHT // 4) if time.time() < self.low_until else MAX_INFLIGHT
 
     async def __aenter__(self):
+        while time.time() < self.cool_until:  # just flooded: everyone waits, then slowly again
+            await asyncio.sleep(min(1.0, self.cool_until - time.time()))
         async with self.cond:
             await self.cond.wait_for(lambda: self.inflight < self.limit)
             self.inflight += 1
@@ -149,8 +153,9 @@ def flooded(client) -> None:
     """Back off after a transport flood: fewer parts at once, no extra connections for now."""
     lim = _limiter(client)
     if time.time() >= lim.low_until:
-        log.warning("Telegram: too many requests at once (429) - slowing down for 10 min")
+        log.warning("Telegram: too many requests at once (429) - slowing down for 15 min")
     lim.low_until = time.time() + FLOOD_PAUSE
+    lim.cool_until = time.time() + FLOOD_COOL
     if not _paused(client):
         _broken(client)
 

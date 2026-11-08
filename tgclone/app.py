@@ -60,7 +60,7 @@ class App:
         return TelegramClient(
             session, self.secrets.api_id, self.secrets.api_hash,
             sequential_updates=self.cfg.live.sequential_updates,
-            flood_sleep_threshold=60,
+            flood_sleep_threshold=60, retry_delay=5,
         )
 
     async def start(self, need_user: bool = False) -> None:
