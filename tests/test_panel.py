@@ -211,3 +211,31 @@ def test_screens_serialize_for_telegram():
             assert len(bytes(client.build_reply_markup(buttons))) > 0
     _, ents = tl_html.parse(ui.help_text())
     assert any(getattr(e, "collapsed", False) for e in ents), "expandable blockquote"
+
+
+def test_stop_on_card_keeps_the_card_and_stops_editing():
+    from tgclone.jobs import Job
+    a, p = panel()
+
+    async def go():
+        ev = TextEvent("x", 1)
+        stopped = asyncio.Event()
+
+        async def work(job):
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.05)  # finishing the current post takes a moment
+                stopped.set()
+                raise
+        job = await p.run_job(ev, Job("clone", "Chan", "k1"), work)
+        await asyncio.sleep(0.01)  # the job is running
+        card = ev.out and ev.out[-1]
+        assert card and "jc:" in str([b.type.data for r in card[1] for b in r])
+        cb = await press(p, f"jc:{job.id}")
+        assert "Stopping" in cb.edits[-1][0] and "jl" in str([b.type.data for r in cb.edits[-1][1] for b in r])
+        await asyncio.wait_for(stopped.wait(), 5)
+        await asyncio.sleep(0.1)
+        return job
+    job = run(go())
+    assert job.state == "stopped"

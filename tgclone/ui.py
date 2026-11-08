@@ -210,8 +210,10 @@ def jobs_view(app: App) -> Screen:
 
 
 def job_card(job: Job) -> Screen:
+    if job.state == "running" and job.cancelled:  # Stop pressed, finishing the current post
+        return job.render() + "\n⏹ <b>Stopping…</b>", [[B("⏳ All jobs", "jl")]]
     if job.state == "running":
-        return job.render(), [[B("⛔ Stop", f"js:{job.id}", "danger"), B("⏳ All jobs", "jl")]]
+        return job.render(), [[B("⛔ Stop", f"jc:{job.id}", "danger"), B("⏳ All jobs", "jl")]]
     return job.render(), [[B("⏳ Jobs", "jl"), B("🏠 Menu", "m", "primary")]]
 
 

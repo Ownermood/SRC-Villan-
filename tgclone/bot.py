@@ -208,8 +208,8 @@ class Panel:
                     await asyncio.wait_for(done.wait(), timeout=self._card_every())
                 except asyncio.TimeoutError:
                     pass
-                if done.is_set() or not card:
-                    return
+                if done.is_set() or not card or job.cancelled:
+                    return  # stopped: the card was set to "Stopping…", finish() writes the result
                 text = job.render()
                 if text != last:
                     last = text
@@ -442,6 +442,13 @@ class Panel:
             if k == "js":
                 n = app.jobs.stop(int(parts[1]))
                 await event.answer("⛔ Stopping…" if n else "Already finished")
+                return await self.show(event, ui.jobs_view(app), edit=True)
+            if k == "jc":  # Stop on the job card itself: the card stays the card
+                job = app.jobs.jobs.get(int(parts[1]))
+                n = app.jobs.stop(int(parts[1]))
+                await event.answer("⛔ Stopping…" if n else "Already finished")
+                if job is not None:
+                    return await self.show(event, ui.job_card(job), edit=True)
                 return await self.show(event, ui.jobs_view(app), edit=True)
             if k == "jS":
                 n = app.jobs.stop()
