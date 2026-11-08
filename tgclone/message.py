@@ -198,7 +198,21 @@ async def retry(fn, *args, tries: int = 4, **kwargs):
             log.warning("Transient error %r, retrying", e)
             jobs.note(f"Telegram hiccup ({type(e).__name__}) — retried")
             await asyncio.sleep(5 * attempt)
+            await _reconnect(getattr(fn, "__self__", None))
     raise RuntimeError("retries exhausted")
+
+
+async def _reconnect(client) -> None:
+    """The account's connection dropped ('Cannot send requests while disconnected'):
+    connect again now instead of waiting for the next health check."""
+    if not isinstance(client, TelegramClient):
+        return
+    try:
+        if not client.is_connected():
+            await asyncio.wait_for(client.connect(), 30)
+            log.info("Reconnected to Telegram")
+    except Exception as e:
+        log.warning("Reconnect failed: %s", e)
 
 
 def _as_list(sent) -> list:

@@ -438,3 +438,28 @@ def test_lost_reply_part_is_asked_again(tmp_path, monkeypatch):
     srv._call = flaky
     out = run(fast.download(srv, doc_msg(big), str(tmp_path / "a.mp4")))
     assert open(out, "rb").read() == data and lost["n"] == 1, "stuck part asked again, file complete"
+
+
+def test_retry_reconnects_a_dropped_client(monkeypatch):
+    from telethon import TelegramClient
+    from tgclone import message as m
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(m.asyncio, "sleep", lambda s: real_sleep(0))
+
+    class C(TelegramClient):
+        def __init__(self):
+            self.up, self.connects = False, 0
+
+        def is_connected(self):
+            return self.up
+
+        async def connect(self):
+            self.connects += 1
+            self.up = True
+
+        async def send_message(self, *a, **k):
+            if not self.up:
+                raise ConnectionError("Cannot send requests while disconnected")
+            return "sent"
+    c = C()
+    assert run(m.retry(c.send_message, 1, "x")) == "sent" and c.connects == 1
