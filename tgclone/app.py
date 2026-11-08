@@ -334,7 +334,8 @@ def _transient(e: Exception) -> bool:
                       asyncio.TimeoutError, TimeoutError)):
         return True
     s = str(e)
-    return "Request was unsuccessful" in s or "Timeout" in s or "internal issues" in s
+    return ("Request was unsuccessful" in s or "Timeout" in s or "internal issues" in s
+            or "HTTP code 429" in s or "invalid buffer" in s.lower() or "Invalid response buffer" in s)
 
 
 def _turbo_ok(app: App, msgs: List[Message]) -> bool:

@@ -463,3 +463,33 @@ def test_retry_reconnects_a_dropped_client(monkeypatch):
             return "sent"
     c = C()
     assert run(m.retry(c.send_message, 1, "x")) == "sent" and c.connects == 1
+
+
+def test_one_cap_for_all_transfers_and_backoff_on_429(tmp_path, monkeypatch):
+    from telethon.errors import InvalidBufferError
+    big = 3 * 1024 * 1024
+    data = os.urandom(big)
+    srv = FileServer(data)
+
+    async def three():
+        return await asyncio.gather(*(fast.download(srv, doc_msg(big), str(tmp_path / f"{i}.mp4"))
+                                      for i in range(3)))
+    outs = run(three())
+    assert all(open(o, "rb").read() == data for o in outs)
+    assert srv.max_inflight <= fast.MAX_INFLIGHT, "3 files at once still share one cap"
+    # Telegram answers 429 once: same part asked again later, cap halves, extra connections pause
+    srv2 = FileServer(data)
+    real = srv2._call
+    hit = {"n": 0}
+
+    async def flood_once(sender, req):
+        if hit["n"] == 0:
+            hit["n"] += 1
+            raise InvalidBufferError(b"\x53\xfe\xff\xff")
+        return await real(sender, req)
+    srv2._call = flood_once
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(fast.asyncio, "sleep", lambda s: real_sleep(0))
+    out = run(fast.download(srv2, doc_msg(big), str(tmp_path / "f.mp4")))
+    assert open(out, "rb").read() == data and hit["n"] == 1
+    assert fast._limiter(srv2).limit == fast.MAX_INFLIGHT // 2 and fast._paused(srv2)

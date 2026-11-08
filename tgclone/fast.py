@@ -27,6 +27,8 @@ PER_CONNECTION = 4  # requests in flight on each extra connection
 POOL_SIZE = 10 * 1024 * 1024  # use extra connections from this size
 IDLE_CLOSE = 60  # seconds an unused shared pool stays open
 PAUSE_AFTER_RESET = 600  # Telegram cut our extra connections: one connection for 10 min
+MAX_INFLIGHT = 12  # file-part requests at once per account on its main connection (all transfers)
+FLOOD_PAUSE = 600  # after Telegram's transport flood (-429): fewer parts at once for 10 min
 PART_TIMEOUT = 60  # one 512 KB part; no answer by then = lost reply, ask again
 MAX_PAUSE = 7 * 24 * 3600  # after repeated resets: extra connections stay off for a week
 MIN_SIZE = 1024 * 1024  # smaller files: one part, nothing to run in parallel
@@ -88,6 +90,53 @@ class _WrongSessionFilter(logging.Filter):
 
 
 logging.getLogger("telethon.network.mtprotosender").addFilter(_WrongSessionFilter())
+
+
+class _Limiter:
+    """Caps file-part requests in flight per account, over ALL its downloads and uploads.
+    Telegram answers too many at once with a transport flood (HTTP code 429) and drops the
+    connection; then the cap halves for 10 min and grows back by itself."""
+
+    def __init__(self) -> None:
+        self.inflight = 0
+        self.low_until = 0.0
+        self.cond = asyncio.Condition()
+
+    @property
+    def limit(self) -> int:
+        return max(2, MAX_INFLIGHT // 2) if time.time() < self.low_until else MAX_INFLIGHT
+
+    async def __aenter__(self):
+        async with self.cond:
+            await self.cond.wait_for(lambda: self.inflight < self.limit)
+            self.inflight += 1
+
+    async def __aexit__(self, *exc):
+        async with self.cond:
+            self.inflight -= 1
+            self.cond.notify_all()
+
+
+def _limiter(client) -> _Limiter:
+    lim = client.__dict__.get("_tgc_limiter")
+    if lim is None:
+        lim = client.__dict__["_tgc_limiter"] = _Limiter()
+    return lim
+
+
+def is_flood(e: BaseException) -> bool:
+    """Telegram's transport-level flood: too many connections / requests at once."""
+    return getattr(e, "code", None) == 429 or "HTTP code 429" in str(e)
+
+
+def flooded(client) -> None:
+    """Back off after a transport flood: fewer parts at once, no extra connections for now."""
+    lim = _limiter(client)
+    if time.time() >= lim.low_until:
+        log.warning("Telegram: too many requests at once (429) - slowing down for 10 min")
+    lim.low_until = time.time() + FLOOD_PAUSE
+    if not _paused(client):
+        _broken(client)
 
 
 def _consume(fut) -> None:
@@ -288,6 +337,7 @@ async def download(client, message, path: str,
         sender = await client._borrow_exported_sender(dc_id) if exported else client._sender
         callers, per = [lambda req, s=sender: client._call(s, req)], WORKERS
     parts = (size + PART - 1) // PART
+    lim = _limiter(client)
     queue: asyncio.Queue = asyncio.Queue()
     for i in range(parts):
         queue.put_nowait(i)
@@ -306,12 +356,20 @@ async def download(client, message, path: str,
                 req = functions.upload.GetFileRequest(location, offset=i * PART, limit=PART)
                 for attempt in range(5):
                     try:
-                        res = await asyncio.wait_for(call(req), PART_TIMEOUT)
+                        if release is None:  # main connection: shared cap for all transfers
+                            async with lim:
+                                res = await asyncio.wait_for(call(req), PART_TIMEOUT)
+                        else:
+                            res = await asyncio.wait_for(call(req), PART_TIMEOUT)
                         break
-                    except (ConnectionError, asyncio.TimeoutError):
-                        if attempt == 4 or release is not None:  # pooled socket gone: fall back now
-                            raise
-                        await asyncio.sleep(1 + attempt)
+                    except Exception as e:
+                        flood = is_flood(e)
+                        if flood:
+                            flooded(client)
+                        if not (flood or isinstance(e, (ConnectionError, asyncio.TimeoutError))) \
+                                or attempt == 4 or (release is not None and not flood):
+                            raise  # pooled socket gone: fall back now
+                        await asyncio.sleep((10 if flood else 1) * (1 + attempt))
                 if not isinstance(res, types.upload.File):
                     raise RuntimeError("CDN redirect")  # caller falls back
                 os.pwrite(fd, res.bytes, i * PART)
@@ -363,6 +421,7 @@ async def upload(client, path: str, progress: Optional[Callable[[int, int], None
     big = size > BIG_FILE
     parts = (size + PART - 1) // PART
     file_id = random.getrandbits(63)
+    lim = _limiter(client)
     queue: asyncio.Queue = asyncio.Queue()
     for i in range(parts):
         queue.put_nowait(i)
@@ -391,13 +450,22 @@ async def upload(client, path: str, progress: Optional[Callable[[int, int], None
                        else functions.upload.SaveFilePartRequest(file_id, i, data))
                 for attempt in range(5):
                     try:
-                        if not await asyncio.wait_for(call(req), PART_TIMEOUT):
+                        if release is None:  # main connection: shared cap for all transfers
+                            async with lim:
+                                ok = await asyncio.wait_for(call(req), PART_TIMEOUT)
+                        else:
+                            ok = await asyncio.wait_for(call(req), PART_TIMEOUT)
+                        if not ok:
                             raise RuntimeError(f"part {i} refused")
                         break
-                    except (ConnectionError, asyncio.TimeoutError):
-                        if attempt == 4 or release is not None:  # pooled socket gone: fall back now
-                            raise
-                        await asyncio.sleep(1 + attempt)
+                    except Exception as e:
+                        flood = is_flood(e)
+                        if flood:
+                            flooded(client)
+                        if not (flood or isinstance(e, (ConnectionError, asyncio.TimeoutError))) \
+                                or attempt == 4 or (release is not None and not flood):
+                            raise  # pooled socket gone: fall back now
+                        await asyncio.sleep((10 if flood else 1) * (1 + attempt))
                 done += len(data)
                 await _report(progress, min(done, size), size)
 

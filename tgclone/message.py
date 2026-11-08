@@ -11,7 +11,7 @@ from typing import List, Optional
 
 from telethon import TelegramClient
 from telethon.errors import (ChatForwardsRestrictedError, DocumentInvalidError, FloodWaitError,
-                             MediaCaptionTooLongError, ServerError)
+                             InvalidBufferError, MediaCaptionTooLongError, ServerError)
 from telethon.tl import functions
 from telethon.extensions import html as tl_html
 
@@ -192,13 +192,20 @@ async def retry(fn, *args, tries: int = 4, **kwargs):
             log.warning("FloodWait %ss (attempt %s)", e.seconds, attempt)
             jobs.stage(f"⏳ Telegram asked to wait {e.seconds}s — continuing after that")
             await asyncio.sleep(e.seconds + 1)
-        except (ServerError, ConnectionError, asyncio.TimeoutError) as e:
+        except (ServerError, ConnectionError, asyncio.TimeoutError, InvalidBufferError) as e:
             if attempt == tries:
                 raise
-            log.warning("Transient error %r, retrying", e)
-            jobs.note(f"Telegram hiccup ({type(e).__name__}) — retried")
-            await asyncio.sleep(5 * attempt)
-            await _reconnect(getattr(fn, "__self__", None))
+            client = getattr(fn, "__self__", None)
+            if fast.is_flood(e):  # Telegram: too many requests at once - back off properly
+                if client is not None:
+                    fast.flooded(client)
+                jobs.note("Telegram said too many requests at once — slowing down")
+                await asyncio.sleep(15 * attempt)
+            else:
+                log.warning("Transient error %r, retrying", e)
+                jobs.note(f"Telegram hiccup ({type(e).__name__}) — retried")
+                await asyncio.sleep(5 * attempt)
+            await _reconnect(client)
     raise RuntimeError("retries exhausted")
 
 
