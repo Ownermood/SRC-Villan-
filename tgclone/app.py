@@ -345,6 +345,10 @@ async def _watched(coro_fn, cap: float):
             if done:
                 return task.result()
             now = time.monotonic()
+            job = jobs_mod.current_job.get()
+            if job is not None and time.time() < job.wait_until:
+                last[0] = now  # Telegram told us to wait: not stuck
+                continue
             if now - last[0] >= STALL or now - start >= cap:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
@@ -362,8 +366,8 @@ def _post_timeout(tms) -> float:
 
 def _transient(e: Exception) -> bool:
     """Errors worth another try later (Telegram side), not mistakes in the post."""
-    from telethon.errors import RpcCallFailError, ServerError, TimedOutError
-    if isinstance(e, (ServerError, TimedOutError, RpcCallFailError, ConnectionError,
+    from telethon.errors import FloodError, RpcCallFailError, ServerError, TimedOutError
+    if isinstance(e, (ServerError, TimedOutError, RpcCallFailError, ConnectionError, FloodError,
                       asyncio.TimeoutError, TimeoutError)):
         return True
     s = str(e)

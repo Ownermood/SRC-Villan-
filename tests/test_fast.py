@@ -493,3 +493,51 @@ def test_one_cap_for_all_transfers_and_backoff_on_429(tmp_path, monkeypatch):
     out = run(fast.download(srv2, doc_msg(big), str(tmp_path / "f.mp4")))
     assert open(out, "rb").read() == data and hit["n"] == 1
     assert fast._limiter(srv2).limit == fast.MAX_INFLIGHT // 2 and fast._paused(srv2)
+
+
+def test_free_account_speed_limit_waits_instead_of_failing(tmp_path, monkeypatch):
+    from telethon.errors import FloodPremiumWaitError
+    big = 3 * 1024 * 1024
+    data = os.urandom(big)
+    srv = FileServer(data)
+    real = srv._call
+    hit = {"n": 0}
+
+    async def limited(sender, req):
+        if hit["n"] == 0:
+            hit["n"] += 1
+            raise FloodPremiumWaitError(request=None, capture=7)
+        return await real(sender, req)
+    srv._call = limited
+    slept = []
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(s):
+        slept.append(s)
+        await real_sleep(0)
+    monkeypatch.setattr(fast.asyncio, "sleep", fake_sleep)
+    out = run(fast.download(srv, doc_msg(big), str(tmp_path / "p.mp4")))
+    assert open(out, "rb").read() == data and 8 in slept, "waited 7+1 s, then continued"
+
+
+def test_stuck_clone_job_restarts_from_progress(monkeypatch):
+    from tgclone import jobs
+    monkeypatch.setattr(jobs, "JOB_STALL", 0.05)
+    monkeypatch.setattr(jobs, "JOB_CHECK", 0.02)
+    runs = []
+
+    async def fn(job):
+        runs.append(job.attempt)
+        if job.attempt == 0:
+            await asyncio.Event().wait()  # stuck forever (Telegram never answered)
+        job.done += 1
+
+    async def go():
+        jm = jobs.JobManager()
+        job = jobs.Job("clone", "T", "k")
+        job.restartable = True
+        jm.start(job, fn)
+        await asyncio.wait_for(job.task, 5)
+        return job
+    job = run(go())
+    assert runs == [0, 1] and job.state == "done" and job.restarts == 1 and "restarted" in job.note

@@ -10,8 +10,8 @@ import uuid
 from typing import List, Optional
 
 from telethon import TelegramClient
-from telethon.errors import (ChatForwardsRestrictedError, DocumentInvalidError, FloodWaitError,
-                             InvalidBufferError, MediaCaptionTooLongError, ServerError)
+from telethon.errors import (ChatForwardsRestrictedError, DocumentInvalidError, FloodPremiumWaitError,
+                             FloodWaitError, InvalidBufferError, MediaCaptionTooLongError, ServerError)
 from telethon.tl import functions
 from telethon.extensions import html as tl_html
 
@@ -188,9 +188,13 @@ async def retry(fn, *args, tries: int = 4, **kwargs):
     for attempt in range(1, tries + 1):
         try:
             return await fn(*args, **kwargs)
-        except FloodWaitError as e:
-            log.warning("FloodWait %ss (attempt %s)", e.seconds, attempt)
-            jobs.stage(f"⏳ Telegram asked to wait {e.seconds}s — continuing after that")
+        except (FloodWaitError, FloodPremiumWaitError) as e:
+            premium = isinstance(e, FloodPremiumWaitError)
+            log.warning("%s %ss (attempt %s)", "FloodPremiumWait" if premium else "FloodWait", e.seconds, attempt)
+            jobs.waiting(e.seconds)
+            jobs.stage(f"⏳ Telegram limits free-account speed: waiting {e.seconds}s "
+                       "(Telegram Premium on this account removes it)" if premium else
+                       f"⏳ Telegram asked to wait {e.seconds}s — continuing after that")
             await asyncio.sleep(e.seconds + 1)
         except (ServerError, ConnectionError, asyncio.TimeoutError, InvalidBufferError) as e:
             if attempt == tries:

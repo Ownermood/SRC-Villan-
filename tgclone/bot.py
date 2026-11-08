@@ -232,8 +232,10 @@ class Panel:
         dests = [await app.resolve(d) for d in fwd.dest]
         title = f"{await app.title(src)} → {len(dests)} chat(s){' (fresh)' if fresh else ''}"
         job = Job("clone", ui.esc(title), f"clone:{app.store.key(src, dests)}")
+        job.restartable = True  # stuck -> restarted from the last sent post (saved progress)
         data = {"forward": {**fwd.model_dump(), "source": src, "dest": dests}}  # resume = not fresh
-        await self.run_job(event, job, lambda j: run_forward(app, fwd, fresh=fresh, job=j),
+        await self.run_job(event, job,
+                           lambda j: run_forward(app, fwd, fresh=fresh and j.attempt == 0, job=j),
                            resume=("clone", data))
 
     async def start_save(self, event, chat, first, last, target=None):

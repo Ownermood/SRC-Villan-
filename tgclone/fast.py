@@ -124,6 +124,22 @@ def _limiter(client) -> _Limiter:
     return lim
 
 
+def _is_wait(e: BaseException) -> bool:
+    from telethon.errors import FloodPremiumWaitError, FloodWaitError
+    return isinstance(e, (FloodWaitError, FloodPremiumWaitError))
+
+
+async def _wait(e) -> None:
+    from tgclone import jobs
+    secs = int(getattr(e, "seconds", 0) or 0)
+    premium = "Premium" in type(e).__name__
+    log.warning("%s %ss on file part", type(e).__name__, secs)
+    jobs.waiting(secs)
+    jobs.stage(f"⏳ Telegram limits free-account speed: waiting {secs}s (Premium removes it)"
+               if premium else f"⏳ Telegram asked to wait {secs}s — continuing after that")
+    await asyncio.sleep(secs + 1)
+
+
 def is_flood(e: BaseException) -> bool:
     """Telegram's transport-level flood: too many connections / requests at once."""
     return getattr(e, "code", None) == 429 or "HTTP code 429" in str(e)
@@ -363,6 +379,9 @@ async def download(client, message, path: str,
                             res = await asyncio.wait_for(call(req), PART_TIMEOUT)
                         break
                     except Exception as e:
+                        if _is_wait(e):  # Telegram: wait N s (free-account speed limit too)
+                            await _wait(e)
+                            continue
                         flood = is_flood(e)
                         if flood:
                             flooded(client)
@@ -370,6 +389,8 @@ async def download(client, message, path: str,
                                 or attempt == 4 or (release is not None and not flood):
                             raise  # pooled socket gone: fall back now
                         await asyncio.sleep((10 if flood else 1) * (1 + attempt))
+                else:
+                    raise RuntimeError("part kept failing")
                 if not isinstance(res, types.upload.File):
                     raise RuntimeError("CDN redirect")  # caller falls back
                 os.pwrite(fd, res.bytes, i * PART)
@@ -459,6 +480,9 @@ async def upload(client, path: str, progress: Optional[Callable[[int, int], None
                             raise RuntimeError(f"part {i} refused")
                         break
                     except Exception as e:
+                        if _is_wait(e):  # Telegram: wait N s (free-account speed limit too)
+                            await _wait(e)
+                            continue
                         flood = is_flood(e)
                         if flood:
                             flooded(client)

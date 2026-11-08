@@ -37,17 +37,31 @@ def human_time(sec: float) -> str:
 current_job: ContextVar[Optional["Job"]] = ContextVar("current_job", default=None)
 
 
+JOB_STALL = 600  # a clone that moved nothing for 10 min is restarted from its last sent post
+JOB_CHECK = 30
+MAX_RESTARTS = 50
+
+
 def stage(text: str) -> None:
     """Show what is happening right now on the running job's card (no-op outside a job)."""
     job = current_job.get()
     if job is not None:
         job.stage = text
+        job.touch()
 
 
 def note(text: str) -> None:
     job = current_job.get()
     if job is not None:
         job.note = text
+        job.touch()
+
+
+def waiting(seconds: float) -> None:
+    """Telegram told us to wait: the job is not stuck until then."""
+    job = current_job.get()
+    if job is not None:
+        job.wait_until = max(job.wait_until, time.time() + seconds + 60)
 
 
 class Job:
@@ -78,10 +92,19 @@ class Job:
         self._samples = []
         self.speed = 0.0  # bytes/s of the current transfer (0 = none)
         self.direction = ""
+        self.active = time.time()  # last sign of life (progress, stage, sent post)
+        self.wait_until = 0.0  # Telegram asked to wait until then: not stuck
+        self.restartable = False  # clones: restart from the last sent post when stuck
+        self.restarts = 0
+        self.attempt = 0  # 0 = first run (fresh clone only then)
+
+    def touch(self) -> None:
+        self.active = time.time()
 
     # called by send() during download/upload
     def file_progress(self, direction: str, cur: int, total: int) -> None:
         now = time.time()
+        self.active = now
         key = (direction, total)
         if key != self._xfer or not self._samples or cur < self._samples[-1][1]:
             self._xfer = key  # a new download / upload started: restart the clock
@@ -160,7 +183,7 @@ class JobManager:
         async def runner():
             current_job.set(job)  # stage()/note() anywhere in this job update its card
             try:
-                await fn(job)
+                await self._supervised(job, fn)
                 job.state = "stopped" if job.cancelled else "done"
             except asyncio.CancelledError:
                 job.state = "stopped"
@@ -199,6 +222,40 @@ class JobManager:
         job.task = asyncio.create_task(runner())
         job.task.add_done_callback(on_done)
         return job
+
+    @staticmethod
+    async def _supervised(job: "Job", fn) -> None:
+        """Run fn(job); a restartable job that shows no sign of life for JOB_STALL seconds
+        (a Telegram reply that never came, a dead connection...) is cancelled and run again.
+        It continues from the last sent post, so nothing is lost and nothing sent twice."""
+        while True:
+            task = asyncio.ensure_future(fn(job))
+            sig = None
+            try:
+                while True:
+                    done, _ = await asyncio.wait({task}, timeout=JOB_CHECK)
+                    if done:
+                        return task.result()
+                    s = (job.done, job.failed, job.last_id)
+                    if s != sig:
+                        sig = s
+                        job.touch()
+                    now = time.time()
+                    if job.restartable and job.restarts < MAX_RESTARTS and now >= job.wait_until \
+                            and now - job.active > JOB_STALL:
+                        break
+            except asyncio.CancelledError:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            job.restarts += 1
+            job.attempt += 1
+            job.touch()
+            job.file, job.speed = "", 0.0
+            job.note = f"Telegram stopped answering — restarted from the last sent post ({job.restarts}x)"
+            log.warning("Job #%s: no progress for %ss - restarting it (%s)", job.id, JOB_STALL, job.restarts)
 
     def stop(self, job_id: Optional[int] = None) -> int:
         """Stop one job (or all running). Returns how many were stopped."""
