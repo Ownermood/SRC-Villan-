@@ -458,6 +458,14 @@ async def run_forward(app: App, fwd: Forward, fresh: bool = False,
         if getattr(ent, "noforwards", False):
             PROTECTED_CHATS.add(src)
             log.info("Source %s is protected: download + upload with prefetch", src)
+            jobs_mod.note("🔒 Source is protected (saving restricted): every file is downloaded "
+                          "and uploaded again")
+        else:  # owner turned protection off since: copy server-side again (fast)
+            if src in PROTECTED_CHATS:
+                log.info("Source %s is no longer protected: copying server-side", src)
+            PROTECTED_CHATS.discard(src)
+            jobs_mod.note("⚡ Source allows forwarding: copied server-side, no download "
+                          "(replies one by one, others 100 at a time)")
     except Exception:
         pass
     jobs_mod.stage("📁 Preparing topics…")

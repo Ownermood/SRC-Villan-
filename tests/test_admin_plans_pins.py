@@ -524,3 +524,18 @@ def test_post_waits_as_long_as_telegram_says(monkeypatch):
     from tgclone.message import CloneMessage
     done = asyncio.run(a.deliver(-1, [CloneMessage(Msg(5, "hello"))], [-2]))
     assert done == 1 and 96 in slept, "waited exactly what Telegram asked, then sent"
+
+
+def test_protection_turned_off_is_noticed_on_next_clone():
+    from tgclone.message import PROTECTED_CHATS
+    a = make_app()
+    PROTECTED_CHATS.add(-1)  # was protected earlier in this run
+
+    async def ent(_):
+        return _t.SimpleNamespace(noforwards=False)
+    a.reader.get_entity = ent
+    try:
+        run(appmod.run_forward(a, Forward(source=-1, dest=[7])))
+    except Exception:
+        pass
+    assert -1 not in PROTECTED_CHATS, "server-side copy again once protection is off"
