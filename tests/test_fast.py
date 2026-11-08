@@ -420,3 +420,21 @@ def test_preupload_is_used_once_by_send(tmp_path):
         assert len(calls) == 8, "a second destination uploads its own copy"
     finally:
         FileServer.__call__ = real
+
+
+def test_lost_reply_part_is_asked_again(tmp_path, monkeypatch):
+    big = 3 * 1024 * 1024
+    data = os.urandom(big)
+    srv = FileServer(data)
+    monkeypatch.setattr(fast, "PART_TIMEOUT", 0.05)
+    lost = {"n": 0}
+    real = srv._call
+
+    async def flaky(sender, req):
+        if req.offset == fast.PART and lost["n"] == 0:  # first reply for part 1 never comes
+            lost["n"] += 1
+            await asyncio.sleep(3600)
+        return await real(sender, req)
+    srv._call = flaky
+    out = run(fast.download(srv, doc_msg(big), str(tmp_path / "a.mp4")))
+    assert open(out, "rb").read() == data and lost["n"] == 1, "stuck part asked again, file complete"

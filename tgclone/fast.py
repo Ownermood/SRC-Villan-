@@ -27,6 +27,7 @@ PER_CONNECTION = 4  # requests in flight on each extra connection
 POOL_SIZE = 10 * 1024 * 1024  # use extra connections from this size
 IDLE_CLOSE = 60  # seconds an unused shared pool stays open
 PAUSE_AFTER_RESET = 600  # Telegram cut our extra connections: one connection for 10 min
+PART_TIMEOUT = 60  # one 512 KB part; no answer by then = lost reply, ask again
 MAX_PAUSE = 7 * 24 * 3600  # after repeated resets: extra connections stay off for a week
 MIN_SIZE = 1024 * 1024  # smaller files: one part, nothing to run in parallel
 SMALL_UPLOAD = 1024 * 1024  # documents above this are uploaded part-parallel (incl. 1-10 MB)
@@ -305,7 +306,7 @@ async def download(client, message, path: str,
                 req = functions.upload.GetFileRequest(location, offset=i * PART, limit=PART)
                 for attempt in range(5):
                     try:
-                        res = await call(req)
+                        res = await asyncio.wait_for(call(req), PART_TIMEOUT)
                         break
                     except (ConnectionError, asyncio.TimeoutError):
                         if attempt == 4 or release is not None:  # pooled socket gone: fall back now
@@ -390,7 +391,7 @@ async def upload(client, path: str, progress: Optional[Callable[[int, int], None
                        else functions.upload.SaveFilePartRequest(file_id, i, data))
                 for attempt in range(5):
                     try:
-                        if not await call(req):
+                        if not await asyncio.wait_for(call(req), PART_TIMEOUT):
                             raise RuntimeError(f"part {i} refused")
                         break
                     except (ConnectionError, asyncio.TimeoutError):

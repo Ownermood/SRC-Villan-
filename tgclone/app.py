@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -283,11 +284,17 @@ class App:
             sent = None
             for attempt in range(4):  # Telegram timeouts / server hiccups: wait and try again
                 try:
+                    t0 = time.monotonic()
                     sent = await self._send_premium_via_bot(d, tms, reply_to or topic, progress, topic)
-                    if sent is None:
-                        sent = await send(self.sender, d, tms, self.cfg, reply_to or topic,
-                                          same_client=self.sender is self.reader,
-                                          progress=progress, topic=topic)
+                    if sent is None:  # a reply Telegram never sends would wait forever: time limit
+                        sent = await asyncio.wait_for(send(self.sender, d, tms, self.cfg, reply_to or topic,
+                                                           same_client=self.sender is self.reader,
+                                                           progress=progress, topic=topic),
+                                                      _post_timeout(tms))
+                    took = time.monotonic() - t0
+                    if took > 120:
+                        log.info("Slow post %s -> %s: %.0fs (%s)", first.id, d, took,
+                                 ", ".join(tm.file_type for tm in tms))
                     break
                 except Exception as e:
                     if attempt < 3 and _transient(e):
@@ -312,6 +319,12 @@ class App:
             for tm in tms:
                 tm.cleanup()
         return done
+
+
+def _post_timeout(tms) -> float:
+    """Longest a post may take before we call it stuck: 15 min + the file at 200 KB/s."""
+    size = sum(getattr(getattr(tm.message, "file", None), "size", 0) or 0 for tm in tms)
+    return 900 + size / 200_000
 
 
 def _transient(e: Exception) -> bool:
@@ -439,13 +452,14 @@ async def run_forward(app: App, fwd: Forward, fresh: bool = False,
             for tm in tms:  # download now (overlaps with the previous upload)
                 if tm.file_type in FILE_TYPES:
                     try:
-                        await tm.download(cfg.max_file_mb, cfg.max_disk_mb, progress)
+                        await asyncio.wait_for(tm.download(cfg.max_file_mb, cfg.max_disk_mb, progress),
+                                               _post_timeout([tm]))
                     except Exception as e:
-                        log.debug("prefetch %s: %s", tm.message.id, e)
+                        log.info("prefetch %s: %s - downloads again when sent", tm.message.id, e or type(e).__name__)
             if p.preupload and not cfg.send_via_bot:
                 for tm in tms:  # ...and upload ahead too: sending is then only attaching the file
                     try:
-                        await tm.preupload(app.sender, progress)
+                        await asyncio.wait_for(tm.preupload(app.sender, progress), _post_timeout([tm]))
                     except Exception as e:
                         log.debug("pre-upload %s: %s", tm.message.id, e)
         return tms

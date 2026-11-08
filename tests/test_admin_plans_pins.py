@@ -445,3 +445,22 @@ def test_sub_admins(hubenv):
     assert 5 not in hub.acc.admin_ids()
     ev = press(hub, "ad", 5)
     assert "Owner only" in ev.answers[-1][0], "removed admin loses access"
+
+
+def test_stuck_post_is_retried_not_waited_forever(monkeypatch):
+    a = make_app()
+    calls = {"n": 0}
+
+    async def stuck_once(*args, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            await asyncio.Event().wait()  # Telegram never answered
+        return [Msg(77, "x")]
+    monkeypatch.setattr(appmod, "send", stuck_once)
+    monkeypatch.setattr(appmod, "_post_timeout", lambda tms: 0.05)
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(appmod.asyncio, "sleep", lambda s: real_sleep(0 if s >= 10 else s))
+    from tgclone.message import CloneMessage
+    tm = CloneMessage(Msg(5, "hello"))
+    done = asyncio.run(a.deliver(-1, [tm], [-2]))
+    assert done == 1 and calls["n"] == 2, "timed out, retried, sent"
