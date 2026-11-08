@@ -230,7 +230,8 @@ class Panel:
         self.needs_login("Copying old posts")
         src = await app.resolve(fwd.source)
         dests = [await app.resolve(d) for d in fwd.dest]
-        title = f"{await app.title(src)} → {len(dests)} chat(s){' (fresh)' if fresh else ''}"
+        title = (f"{await app.title(src)} → {len(dests)} chat(s){' (fresh)' if fresh else ''}"
+                 f"{' · 🖼 media only' if fwd.only_media else ''}")
         job = Job("clone", ui.esc(title), f"clone:{app.store.key(src, dests)}")
         job.restartable = True  # stuck -> restarted from the last sent post (saved progress)
         data = {"forward": {**fwd.model_dump(), "source": src, "dest": dests}}  # resume = not fresh
@@ -432,6 +433,14 @@ class Panel:
                 self.state.pop(uid, None)
                 await event.answer("Saving…")
                 return await self.add_forward(event, Forward(source=st["src"], dest=st["dests"]))
+            if k == "cw":  # clone step 3: everything / only media
+                st = self.state.get(uid)
+                if not st or st.get("kind") != "clone_what":
+                    return await event.answer("Start again: 🔁 Clone Channel/Group", alert=True)
+                self.state.pop(uid, None)
+                await event.answer("Starting…")
+                return await self.start_clone(event, Forward(source=norm_ref(st["src"]), dest=[norm_ref(st["dest"])],
+                                                             only_media=parts[1] == "media"), fresh=False)
             if k == "cl":
                 self.needs_login("Copying old posts")
                 self.state[uid] = {"kind": "clone_src"}
@@ -606,9 +615,8 @@ class Panel:
                 if await app.resolve(ref) == await app.resolve(st["src"]):
                     raise ValueError("Destination can't be the source")
                 await self.check_chat(ref, "dest")
-                self.state.pop(uid, None)
-                return await self.start_clone(event, Forward(source=norm_ref(st["src"]),
-                                                             dest=[norm_ref(ref)]), fresh=False)
+                st.update(kind="clone_what", dest=ref, dest_title=await app.title(ref))
+                return await self.show(event, ui.wizard_prompt("clone_what", app, st))
             if kind == "save":
                 link = parse_link(msg.raw_text)
                 if not link:

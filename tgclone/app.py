@@ -581,6 +581,8 @@ async def run_forward(app: App, fwd: Forward, fresh: bool = False,
                 continue
             if m.action is not None or (not m.message and not m.media):
                 continue  # service / empty
+            if fwd.only_media and (m.media is None or isinstance(m.media, types.MessageMediaWebPage)):
+                continue  # "only media" clone: text chat messages (and link previews) skipped
             if buf and m.grouped_id != buf[0].grouped_id:
                 await push(buf)
                 buf = []

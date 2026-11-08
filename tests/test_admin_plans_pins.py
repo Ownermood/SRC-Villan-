@@ -539,3 +539,23 @@ def test_protection_turned_off_is_noticed_on_next_clone():
     except Exception:
         pass
     assert -1 not in PROTECTED_CHATS, "server-side copy again once protection is off"
+
+
+def test_only_media_clone_skips_text_chat(monkeypatch):
+    a = make_app()
+    msgs = [Msg(1, "hi all"), Msg(2, "photo", kind="photo", media=object()), Msg(3, "ok"),
+            Msg(4, "", kind="video", media=object())]
+
+    async def it(chat, reverse=True, min_id=0, max_id=0):
+        for m in msgs:
+            yield m
+    a.reader.iter_messages = it
+    sent = []
+
+    async def deliver(src, tms, dests, skip_done=False, progress=None):
+        sent.append(tms[0].message.id)
+        return 1
+    a.deliver = deliver
+    monkeypatch.setattr(appmod, "_turbo_ok", lambda app, m: False)
+    run(appmod.run_forward(a, Forward(source=-1, dest=[7], only_media=True)))
+    assert sent == [2, 4], "text chat messages skipped, media copied"

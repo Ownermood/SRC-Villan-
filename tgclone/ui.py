@@ -407,14 +407,22 @@ def wizard_prompt(kind: str, app: App, data: dict = None) -> Screen:
                 f"Send <b>destination</b> chat(s), one by one. Added:\n{got}",
                 [[B("✅ Done", "nd", "success"), B("✖️ Cancel", "x")]])
     if kind == "clone_src":
-        return ("<b>🔁 Clone Channel/Group · step 1/2</b>\n\nSend the chat to <b>copy from</b>:\n<blockquote>"
+        return ("<b>🔁 Clone Channel/Group · step 1/3</b>\n\nSend the chat to <b>copy from</b>:\n<blockquote>"
                 "• forward any message from it\n• or @username / -100id / t.me link</blockquote>\n"
                 "<i>Every old post is copied (topics too), in order. It continues by itself after a "
                 "restart.</i>", cancel)
     if kind == "clone_dest":
-        return (f"<b>🔁 Clone Channel/Group · step 2/2</b>\n\nFrom: <b>{esc(data['src_title'])}</b>\n\n"
+        return (f"<b>🔁 Clone Channel/Group · step 2/3</b>\n\nFrom: <b>{esc(data['src_title'])}</b>\n\n"
                 "Now send the chat to <b>copy into</b> (forward a message from it, or its "
                 "@username / -100id). Your account must be an admin there.", cancel)
+    if kind == "clone_what":
+        return (f"<b>🔁 Clone Channel/Group · step 3/3</b>\n\nFrom: <b>{esc(data['src_title'])}</b>\n"
+                f"To: <b>{esc(data['dest_title'])}</b>\n\nWhat should I copy?\n<blockquote>"
+                "💬 <b>Everything</b> · media and text messages\n"
+                "🖼 <b>Only media</b> · photos, videos, PDF / files, audio, voice, GIFs, polls — "
+                "plain text chat messages are skipped</blockquote>",
+                [[B("💬 Everything", "cw:all", "primary"), B("🖼 Only media", "cw:media", "success")],
+                 [B("✖️ Cancel", "x")]])
     if kind == "save":
         return ("<b>📥 Save posts</b>\n\nSend a post link:\n<blockquote>"
                 "<code>https://t.me/channel/123</code>\n<code>https://t.me/c/1234567/123</code>\n"

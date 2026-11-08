@@ -87,6 +87,7 @@ class Forward(BaseModel):
     dest: List[ChatRef] = []
     offset: int = 0  # past: start after this message id
     end: int = 0  # past: stop at this message id (0 = till latest)
+    only_media: bool = False  # clone: skip text-only messages (group chat), copy photos/videos/files
 
 
 class LiveSettings(BaseModel):

@@ -287,15 +287,17 @@ def test_clone_wizard_from_main_menu(hubenv, monkeypatch):
     started = []
 
     async def fake_clone(self, event, fwd, fresh):
-        started.append((fwd.source, fwd.dest, fresh))
+        started.append((fwd.source, fwd.dest, fresh, fwd.only_media))
     monkeypatch.setattr(botmod.Panel, "start_clone", fake_clone)
     ev = press(hub, "cl", OWNER)
-    assert "step 1/2" in ev.edits[-1][0]
+    assert "step 1/3" in ev.edits[-1][0]
     say(hub, "-100111", OWNER)
     ev = say(hub, "-100111", OWNER)
     assert "can't be the source" in ev.out[-1][0]
-    say(hub, "-100222", OWNER)
-    assert started == [(-100111, [-100222], False)]
+    ev = say(hub, "-100222", OWNER)
+    assert "step 3/3" in ev.out[-1][0] and not started, "asks: everything or only media"
+    press(hub, "cw:media", OWNER)
+    assert started == [(-100111, [-100222], False, True)]
     assert hub.ws[OWNER][0].cfg.forwards == [], "a one-off clone doesn't add a live forward"
 
 
