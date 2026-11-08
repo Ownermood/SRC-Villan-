@@ -501,3 +501,26 @@ def test_watchdog_lets_a_slow_but_moving_post_finish(monkeypatch):
         raise AssertionError("must time out")
     except asyncio.TimeoutError as e:
         assert "no answer" in str(e)
+
+
+def test_post_waits_as_long_as_telegram_says(monkeypatch):
+    from telethon.errors import FloodWaitError
+    a = make_app()
+    calls = {"n": 0}
+
+    async def flood_once(*args, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise FloodWaitError(request=None, capture=95)
+        return [Msg(77, "x")]
+    monkeypatch.setattr(appmod, "send", flood_once)
+    slept = []
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(s):
+        slept.append(s)
+        await real_sleep(0)
+    monkeypatch.setattr(appmod.asyncio, "sleep", fake_sleep)
+    from tgclone.message import CloneMessage
+    done = asyncio.run(a.deliver(-1, [CloneMessage(Msg(5, "hello"))], [-2]))
+    assert done == 1 and 96 in slept, "waited exactly what Telegram asked, then sent"

@@ -282,7 +282,7 @@ class App:
                     log.warning("Topic for %s:%s -> %s failed: %s", src, src_topic, d, e)
             reply_to = self.store.get_one(src, replied, d) if replied else None
             sent = None
-            for attempt in range(4):  # Telegram timeouts / server hiccups: wait and try again
+            for attempt in range(8):  # Telegram timeouts / server hiccups / waits: wait and try again
                 try:
                     t0 = time.monotonic()
                     sent = await self._send_premium_via_bot(d, tms, reply_to or topic, progress, topic)
@@ -301,12 +301,19 @@ class App:
                                  ", ".join(tm.file_type for tm in tms))
                     break
                 except Exception as e:
-                    if attempt < 3 and _transient(e):
-                        wait = (10, 30, 60)[attempt]
-                        log.warning("Post %s -> %s: %s - retrying in %ss", first.id, d, e, wait)
-                        jobs_mod.stage(f"🔁 Telegram timeout on post {first.id} — retrying in {wait}s")
-                        await asyncio.sleep(wait)
-                        continue
+                    told = int(getattr(e, "seconds", 0) or 0)  # FloodWait-type: Telegram said how long
+                    if told or (attempt < 3 and _transient(e)):
+                        if told and attempt >= 6:
+                            told = 0  # waited 6 times already: give up on this post below
+                        else:
+                            wait = told + 1 if told else (10, 30, 60)[attempt]
+                            why = (f"Telegram asked to wait {told}s" if told else
+                                   f"Telegram: {type(e).__name__} {str(e)[:60]}")
+                            log.warning("Post %s -> %s: %r - retrying in %ss", first.id, d, e, wait)
+                            jobs_mod.waiting(wait)
+                            jobs_mod.stage(f"🔁 Post {first.id}: {why} — retrying in {wait}s")
+                            await asyncio.sleep(wait)
+                            continue
                     log.error("Send %s:%s -> %s failed: %s", src, first.id, d, e)
                     job = jobs_mod.current_job.get()
                     if job is not None and first.id not in job.failed_ids:
