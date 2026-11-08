@@ -256,3 +256,18 @@ def test_clone_from_forward_asks_everything_or_media(monkeypatch):
     run(press(p, f"fC:0:{h}:1:all"))
     assert started == [(True, False), (False, True)]
     assert a.cfg.forwards[0].only_media is False, "the saved forward (live sync) is not changed"
+
+
+def test_clone_command_asks_unless_choice_typed(monkeypatch):
+    a, p = panel()
+    started = []
+
+    async def fake(self, event, fwd, fresh):
+        started.append((fwd.source, fwd.dest, fwd.only_media))
+    monkeypatch.setattr(bot.Panel, "start_clone", fake)
+    ev = run(say(p, "/clone -1002875427384 -1004164214461"))
+    assert "Only media" in str([b.text for r in ev.out[-1][1] for b in r]) and not started
+    run(press(p, "cw:media"))
+    assert started == [(-1002875427384, [-1004164214461], True)]
+    run(say(p, "/clone -100111 -100222 all"))
+    assert started[-1] == (-100111, [-100222], False), "typed the choice: starts right away"

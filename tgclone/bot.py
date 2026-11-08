@@ -307,11 +307,22 @@ class Panel:
                 raise ValueError(f"Usage: {p}clone #1 [fresh] [media]  or  {p}clone <source> <dest> [media]")
             fresh = "fresh" in parts
             media = "media" in parts
-            parts = [x for x in parts if x not in ("fresh", "media")]
+            chosen = media or "all" in parts  # typed the choice already: start right away
+            parts = [x for x in parts if x not in ("fresh", "media", "all")]
             if len(parts) >= 2:
                 fwd = Forward(source=norm_ref(parts[0]), dest=[norm_ref(d) for d in parts[1:]])
+                if not chosen:  # ask: everything or only media
+                    self.state[event.sender_id] = {
+                        "kind": "clone_what", "src": fwd.source, "dest": fwd.dest, "fresh": fresh,
+                        "src_title": await app.title(fwd.source),
+                        "dest_title": ", ".join([await app.title(d) for d in fwd.dest])}
+                    return await self.show(event, ui.wizard_prompt("clone_what", app,
+                                                                   self.state[event.sender_id]))
             else:
-                fwd = app.cfg.forwards[self.pick(parts[0])]
+                i = self.pick(parts[0])
+                fwd = app.cfg.forwards[i]
+                if not chosen:
+                    return await self.show(event, ui.clone_choice(str(i), str(ui.fhash(fwd)), fresh))
             return await self.start_clone(event, fwd.model_copy(update={"only_media": media}), fresh)
         if name == "batch":
             parts = args.split()
@@ -444,8 +455,11 @@ class Panel:
                     return await event.answer("Start again: 🔁 Clone Channel/Group", alert=True)
                 self.state.pop(uid, None)
                 await event.answer("Starting…")
-                return await self.start_clone(event, Forward(source=norm_ref(st["src"]), dest=[norm_ref(st["dest"])],
-                                                             only_media=parts[1] == "media"), fresh=False)
+                dests = st["dest"] if isinstance(st["dest"], list) else [st["dest"]]
+                return await self.start_clone(event, Forward(source=norm_ref(st["src"]),
+                                                             dest=[norm_ref(d) for d in dests],
+                                                             only_media=parts[1] == "media"),
+                                              fresh=st.get("fresh", False))
             if k == "cl":
                 self.needs_login("Copying old posts")
                 self.state[uid] = {"kind": "clone_src"}

@@ -65,7 +65,7 @@ Moving to a VPS: copy `.env` and `data/` (without `data/downloads/`), and never 
 
 ```
 /start /menu /profile /login /logout /help
-/list /add <src> <dest..> /remove <#n|src> /toggle <#n> /clone <#n> [fresh] /clone <src> <dest>
+/list /add <src> <dest..> /remove <#n|src> /toggle <#n> /clone <#n> [fresh] [media|all] /clone <src> <dest> [media|all]
 /batch <link> <count> /jobs /stop [id] /setchat <chat|off> /style <s> /status
 /thumb /setthumb (photo caption or reply) /delthumb
 owner: /admin /addpremium <id|@user> <days> /rmpremium <id> /block <chat|link|folder> /unblock <chat>
