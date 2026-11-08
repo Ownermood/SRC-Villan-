@@ -286,11 +286,15 @@ class App:
                 try:
                     t0 = time.monotonic()
                     sent = await self._send_premium_via_bot(d, tms, reply_to or topic, progress, topic)
-                    if sent is None:  # a reply Telegram never sends would wait forever: time limit
-                        sent = await asyncio.wait_for(send(self.sender, d, tms, self.cfg, reply_to or topic,
-                                                           same_client=self.sender is self.reader,
-                                                           progress=progress, topic=topic),
-                                                      _post_timeout(tms))
+                    if sent is None:  # a reply Telegram never sends would wait forever: watchdog
+                        def run(mark):
+                            def prog(direction, cur, total):
+                                mark()
+                                if progress:
+                                    progress(direction, cur, total)
+                            return send(self.sender, d, tms, self.cfg, reply_to or topic,
+                                        same_client=self.sender is self.reader, progress=prog, topic=topic)
+                        sent = await _watched(run, _post_timeout(tms))
                     took = time.monotonic() - t0
                     if took > 120:
                         log.info("Slow post %s -> %s: %.0fs (%s)", first.id, d, took,
@@ -319,6 +323,35 @@ class App:
             for tm in tms:
                 tm.cleanup()
         return done
+
+
+STALL = 300  # a post with no progress at all for 5 min is stuck (Telegram never answered)
+STALL_CHECK = 15  # how often the watchdog looks
+
+
+async def _watched(coro_fn, cap: float):
+    """Run coro_fn(progress_mark) and cancel it when nothing moved for STALL seconds
+    (or after cap). Uploads / downloads of THIS post mark progress; a reply Telegram
+    never sends no longer blocks the job for hours."""
+    last = [time.monotonic()]
+    start = last[0]
+
+    def mark() -> None:
+        last[0] = time.monotonic()
+    task = asyncio.ensure_future(coro_fn(mark))
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=min(STALL_CHECK, STALL))
+            if done:
+                return task.result()
+            now = time.monotonic()
+            if now - last[0] >= STALL or now - start >= cap:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise asyncio.TimeoutError(f"no answer from Telegram for {int(now - last[0])}s")
+    except asyncio.CancelledError:
+        task.cancel()
+        raise
 
 
 def _post_timeout(tms) -> float:

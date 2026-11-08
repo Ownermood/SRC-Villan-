@@ -457,7 +457,8 @@ def test_stuck_post_is_retried_not_waited_forever(monkeypatch):
             await asyncio.Event().wait()  # Telegram never answered
         return [Msg(77, "x")]
     monkeypatch.setattr(appmod, "send", stuck_once)
-    monkeypatch.setattr(appmod, "_post_timeout", lambda tms: 0.05)
+    monkeypatch.setattr(appmod, "STALL", 0.05)
+    monkeypatch.setattr(appmod, "STALL_CHECK", 0.01)
     real_sleep = asyncio.sleep
     monkeypatch.setattr(appmod.asyncio, "sleep", lambda s: real_sleep(0 if s >= 10 else s))
     from tgclone.message import CloneMessage
@@ -480,3 +481,23 @@ def test_scale_settings_for_many_users(hubenv):
     assert panel._card_every() == 4.0
     from tgclone.hub import crypto_backend
     assert crypto_backend()
+
+
+def test_watchdog_lets_a_slow_but_moving_post_finish(monkeypatch):
+    monkeypatch.setattr(appmod, "STALL", 0.1)
+    monkeypatch.setattr(appmod, "STALL_CHECK", 0.02)
+
+    async def slow(mark):
+        for _ in range(10):  # 0.5 s in total, but progress every 0.05 s
+            await asyncio.sleep(0.05)
+            mark()
+        return "sent"
+
+    async def silent(mark):
+        await asyncio.Event().wait()
+    assert asyncio.run(appmod._watched(slow, 60)) == "sent"
+    try:
+        asyncio.run(appmod._watched(silent, 60))
+        raise AssertionError("must time out")
+    except asyncio.TimeoutError as e:
+        assert "no answer" in str(e)
